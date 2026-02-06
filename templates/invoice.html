@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Счет</title>
+    <style>
+        @page {
+            size: A4;
+            margin: 2cm;
+        }
+        body {
+            font-family: 'Arial', sans-serif;
+            font-size: 12px;
+            line-height: 1.6;
+            color: #333;
+            margin: 0;
+            padding: 0;
+        }
+        .header {
+            text-align: center;
+            border-bottom: 3px solid #2c5aa0;
+            padding-bottom: 20px;
+            margin-bottom: 30px;
+        }
+        .logo {
+            max-width: 100px;
+            max-height: 100px;
+            margin-bottom: 10px;
+        }
+        .header h1 {
+            color: #2c5aa0;
+            font-size: 24px;
+            margin: 10px 0;
+            font-weight: bold;
+        }
+        .doctor-info, .patient-info {
+            margin-bottom: 20px;
+        }
+        .doctor-info p, .patient-info p {
+            margin: 5px 0;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+        }
+        th {
+            background-color: #2c5aa0;
+            color: white;
+            padding: 12px;
+            text-align: left;
+            font-weight: bold;
+            border: 1px solid #1a3d6b;
+        }
+        td {
+            padding: 10px;
+            border: 1px solid #ddd;
+        }
+        .total {
+            text-align: right;
+            font-weight: bold;
+            font-size: 14px;
+            margin-top: 20px;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #ddd;
+            color: #666;
+            font-size: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        {% if doctor.logo_url %}
+        <img src="{{ doctor.logo_url }}" alt="Logo" class="logo">
+        {% endif %}
+        <h1>СЧЕТ</h1>
+    </div>
+    
+    <div class="doctor-info">
+        <p><strong>Врач:</strong> {{ doctor.full_name }}</p>
+        {% if doctor.specialization %}
+        <p><strong>Специализация:</strong> {{ doctor.specialization }}</p>
+        {% endif %}
+        {% if doctor.phone %}
+        <p><strong>Телефон:</strong> {{ doctor.phone }}</p>
+        {% endif %}
+        {% if doctor.address %}
+        <p><strong>Адрес:</strong> {{ doctor.address }}</p>
+        {% endif %}
+    </div>
+    
+    <div class="patient-info">
+        <p><strong>Пациент:</strong> {{ patient.full_name }}</p>
+        {% if patient.phone %}
+        <p><strong>Телефон:</strong> {{ patient.phone }}</p>
+        {% endif %}
+    </div>
+    
+    <table>
+        <thead>
+            <tr>
+                <th>Услуга</th>
+                <th>Цена</th>
+                <th>Скидка</th>
+                <th>Итого</th>
+                <th>Оплачено</th>
+                <th>Статус</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for treatment in treatments %}
+            <tr>
+                <td>{{ treatment.service_name or 'Услуга' }}</td>
+                <td>{{ (treatment.price or 0)|format_money }}</td>
+                <td>{% if treatment.discount_percent %}{{ treatment.discount_percent }}%{% endif %}{% if treatment.discount_percent and treatment.discount_amount %} + {% endif %}{% if treatment.discount_amount %}{{ (treatment.discount_amount or 0)|format_money }}{% endif %}{% if not treatment.discount_percent and not treatment.discount_amount %}—{% endif %}</td>
+                <td>{{ effective_prices[treatment.id]|format_money }}</td>
+                <td>{{ (treatment.paid_amount or 0)|format_money }}</td>
+                <td>{% if treatment.payment_status == 'full' %}оплачено полностью{% elif treatment.payment_status == 'partial' %}частичная оплата{% else %}не оплачено{% endif %}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    
+    <div class="total">
+        <p>Итого: {{ final_total|format_money }}</p>
+        {% if (total_paid|default(0)) > 0 %}
+        <p>Оплачено: {{ (total_paid|default(0))|format_money }}</p>
+        {% endif %}
+        {% if (total_debt|default(0)) > 0 %}
+        <p>Долг: {{ (total_debt|default(0))|format_money }}</p>
+        {% endif %}
+    </div>
+    
+    <div class="footer">
+        <p>Сформировано автоматически через MiniStom Bot</p>
+        <p>{{ generation_date.strftime('%d.%m.%Y %H:%M') }}</p>
+    </div>
+</body>
+</html>
+
