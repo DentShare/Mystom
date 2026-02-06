@@ -540,12 +540,18 @@ ADMIN_IDS=123456789,987654321
 
 ### Вариант 2: Railway
 
+В корне проекта есть **Dockerfile** и **.dockerignore** — Railway соберёт образ с WeasyPrint (Cairo/Pango).
+
 1. Зарегистрируйтесь на [railway.app](https://railway.app), создайте проект.
-2. Добавьте **PostgreSQL** (Add Service → Database → PostgreSQL). В переменных появится `DATABASE_URL` (для Railway замените схему на `postgresql+asyncpg://` если нужно).
-3. Подключите репозиторий GitHub и выберите репозиторий MiniStom.
-4. В настройках сервиса задайте переменные: `BOT_TOKEN`, `ADMIN_IDS`, скопируйте `DATABASE_URL` из PostgreSQL (схема `postgresql+asyncpg://...`).
-5. **WeasyPrint на Railway** лучше запускать в Docker. Создайте в корне проекта `Dockerfile` с установкой cairo/pango и запуском `python -m app.main`. В Railway укажите сборку через этот Dockerfile.
-6. Деплой — при пуше в GitHub. Сервис по умолчанию «всегда включён» — бот будет работать 24/7.
+2. Добавьте **PostgreSQL**: в проекте нажмите **Add Service** → **Database** → **PostgreSQL**. В настройках PostgreSQL скопируйте переменную `DATABASE_URL` (формат `postgresql://...`). Для приложения замените схему на **`postgresql+asyncpg://`** (в начале URL).
+3. Добавьте сервис из репозитория: **Add Service** → **GitHub Repo** → выберите **DentShare/Mystom** (или ваш репо). Railway определит Dockerfile и соберёт образ.
+4. В настройках **сервиса бота** (не БД) откройте **Variables** и задайте:
+   - `BOT_TOKEN` — токен от @BotFather
+   - `ADMIN_IDS` — один или несколько Telegram ID через запятую (например `123456789`)
+   - `DATABASE_URL` — скопируйте из сервиса PostgreSQL и замените в начале `postgresql://` на `postgresql+asyncpg://`
+   - По желанию: `ADMIN_WEBAPP_URL`, `TIMEZONE_API_KEY`
+5. **Сборка**: в разделе **Settings** сервиса убедитесь, что используется **Dockerfile** (Root Directory — пусто, Dockerfile path — `Dockerfile`). При пуше в GitHub деплой запустится автоматически.
+6. Сервис бота не открывает HTTP-порт — это нормально. Оставьте тип сервиса как есть; бот работает по long polling. Деплой — при пуше в GitHub; сервис по умолчанию «всегда включён».
 
 Админку (FastAPI) можно развернуть вторым сервисом в том же проекте и задать для бота `ADMIN_WEBAPP_URL` на URL этого сервиса (Railway даёт HTTPS).
 

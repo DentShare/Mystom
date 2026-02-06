@@ -1,0 +1,14 @@
+# Не копировать в образ
+.git
+.gitignore
+.env
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.vscode
+.idea
+*.md
+!README.md
