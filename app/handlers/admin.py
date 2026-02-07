@@ -33,19 +33,18 @@ async def cmd_admin(message: Message):
         )
         return
 
-    # Для проверки: показываем ID (должен совпадать с ADMIN_IDS в Variables)
+    # Без parse_mode: символы < > | и разметка ломают парсер Telegram
     help_text = (
-        "🛠 **Админ-панель**\n\n"
-        "Ваш ID: `{}` (должен быть в ADMIN_IDS)\n\n"
-        "**Команды:**\n"
+        "🛠 Админ-панель\n\n"
+        "Ваш ID: {} (должен быть в ADMIN_IDS)\n\n"
+        "Команды:\n"
         "• /admin_list_users — список пользователей\n"
-        "• /admin_set_tier <telegram_id> <0|1|2> — уровень без срока\n"
-        "• /admin_set_subscription <telegram_id> <0|1|2> <дней> — уровень и срок\n\n"
+        "• /admin_set_tier telegram_id 0 или 1 или 2 — уровень без срока\n"
+        "• /admin_set_subscription telegram_id tier дни — уровень и срок\n\n"
         "Уровни: 0=Basic, 1=Standard, 2=Premium.\n"
         "Telegram ID смотрите в списке пользователей."
     ).format(message.from_user.id)
     builder = InlineKeyboardBuilder()
-    # Web App показываем только если задан URL в конфиге
     admin_webapp_url = getattr(Config, "ADMIN_WEBAPP_URL", None) or ""
     if admin_webapp_url.strip():
         builder.button(
@@ -55,7 +54,8 @@ async def cmd_admin(message: Message):
     builder.adjust(1)
     await message.answer(
         help_text,
-        reply_markup=builder.as_markup() if admin_webapp_url.strip() else None
+        reply_markup=builder.as_markup() if admin_webapp_url.strip() else None,
+        parse_mode=None,
     )
 
 
