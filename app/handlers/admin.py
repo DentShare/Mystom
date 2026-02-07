@@ -21,19 +21,29 @@ def _is_admin(telegram_id: int) -> bool:
 @router.message(Command("admin"))
 async def cmd_admin(message: Message):
     """Меню админа: справка и кнопка Web App"""
-    if message.from_user and message.from_user.id not in Config.ADMIN_IDS:
-        await message.answer("❌ Доступ запрещен")
+    if not message.from_user:
+        return
+    if message.from_user.id not in Config.ADMIN_IDS:
+        await message.answer(
+            "❌ Доступ запрещён. Ваш Telegram ID: {}. "
+            "Добавьте его в переменную ADMIN_IDS в настройках бота (Railway → Variables).".format(
+                message.from_user.id
+            ),
+            parse_mode=None,
+        )
         return
 
+    # Для проверки: показываем ID (должен совпадать с ADMIN_IDS в Variables)
     help_text = (
         "🛠 **Админ-панель**\n\n"
+        "Ваш ID: `{}` (должен быть в ADMIN_IDS)\n\n"
         "**Команды:**\n"
         "• /admin_list_users — список пользователей\n"
         "• /admin_set_tier <telegram_id> <0|1|2> — уровень без срока\n"
         "• /admin_set_subscription <telegram_id> <0|1|2> <дней> — уровень и срок\n\n"
         "Уровни: 0=Basic, 1=Standard, 2=Premium.\n"
         "Telegram ID смотрите в списке пользователей."
-    )
+    ).format(message.from_user.id)
     builder = InlineKeyboardBuilder()
     # Web App показываем только если задан URL в конфиге
     admin_webapp_url = getattr(Config, "ADMIN_WEBAPP_URL", None) or ""
@@ -49,7 +59,7 @@ async def cmd_admin(message: Message):
     )
 
 
-@router.message(Command("admin_set_tier"))
+@router.message(Command("admin_set_tier", "adminsettier"))
 async def cmd_set_tier(message: Message, db_session: AsyncSession):
     """Установка уровня подписки"""
     if message.from_user.id not in Config.ADMIN_IDS:
@@ -90,7 +100,7 @@ async def cmd_set_tier(message: Message, db_session: AsyncSession):
         await message.answer("❌ Неверный формат. Используйте: /admin_set_tier <telegram_id> <tier>")
 
 
-@router.message(Command("admin_set_subscription"))
+@router.message(Command("admin_set_subscription", "adminsetsubscription"))
 async def cmd_set_subscription(message: Message, db_session: AsyncSession):
     """Установка подписки на N дней"""
     if message.from_user.id not in Config.ADMIN_IDS:
@@ -133,7 +143,7 @@ async def cmd_set_subscription(message: Message, db_session: AsyncSession):
         await message.answer("❌ Неверный формат. Используйте: /admin_set_subscription <telegram_id> <tier> <days>")
 
 
-@router.message(Command("admin_list_users"))
+@router.message(Command("admin_list_users", "adminlistusers"))
 async def cmd_list_users(message: Message, db_session: AsyncSession):
     """Список всех пользователей с уровнем и сроком подписки"""
     if message.from_user and message.from_user.id not in Config.ADMIN_IDS:
@@ -148,13 +158,12 @@ async def cmd_list_users(message: Message, db_session: AsyncSession):
         await message.answer("📋 Пользователей нет")
         return
 
-    text_parts = ["📋 **Список пользователей** (для команд используйте telegram_id):\n"]
+    # Без parse_mode: имена пользователей могут содержать _ * [ и ломать Markdown
+    text_parts = ["📋 Список пользователей (для команд используйте telegram_id):\n"]
     for u in users:
         tier_name = TIER_NAMES.get(u.subscription_tier, "Basic")
         end = f", до {u.subscription_end_date.strftime('%d.%m.%Y')}" if u.subscription_end_date else ", без срока"
-        text_parts.append(
-            f"👤 {u.full_name}\n"
-            f"   ID: `{u.telegram_id}` · {tier_name}{end}\n"
-        )
-    await message.answer("\n".join(text_parts))
+        name = (u.full_name or "").strip() or "—"
+        text_parts.append(f"👤 {name}\n   ID: {u.telegram_id} · {tier_name}{end}\n")
+    await message.answer("\n".join(text_parts), parse_mode=None)
 
