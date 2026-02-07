@@ -91,10 +91,15 @@
     async function loadUsers() {
       const content = document.getElementById('content');
       content.innerHTML = '<p class="loading">Загрузка…</p>';
+      var initData = getInitData();
+      if (!initData || initData.length < 10) {
+        content.innerHTML = '<p class="msg error">Откройте админку только из Telegram: в боте напишите /admin и нажмите кнопку «Админка (Web App)». В браузере по прямой ссылке авторизация невозможна.</p>';
+        return;
+      }
       try {
         const r = await fetch(API_BASE + '/api/users', { headers: headers() });
         if (r.status === 401) {
-          content.innerHTML = '<p class="msg error">Не авторизован. Откройте админку из бота (кнопка в /admin).</p>';
+          content.innerHTML = '<p class="msg error">Не авторизован. Вы открыли из бота? Тогда в Railway у сервиса админки (industrious-insight) в Variables задайте BOT_TOKEN — тот же, что у сервиса бота (Mystom). Сохраните и сделайте Redeploy.</p>';
           return;
         }
         if (r.status === 403) {
