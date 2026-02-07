@@ -2,9 +2,25 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 from app.config import Config
 from app.database.models import Base
 
-# Создание асинхронного движка БД
+
+def _async_database_url(url: str) -> str:
+    """Для async движка нужен asyncpg; postgres:// и postgresql:// приводим к postgresql+asyncpg://."""
+    url = (url or "").strip()
+    if "+asyncpg" in url:
+        return url
+    # Любой вариант postgres(ql) без asyncpg -> явно asyncpg (избегаем подхвата psycopg2)
+    if url.startswith("postgresql://"):
+        return "postgresql+asyncpg://" + url[len("postgresql://"):]
+    if url.startswith("postgres://"):
+        return "postgresql+asyncpg://" + url[len("postgres://"):]
+    return url
+
+
+# Создание асинхронного движка БД (обязательно postgresql+asyncpg, иначе Railway подхватит psycopg2)
+_db_url = _async_database_url(Config.DATABASE_URL)
+assert "+asyncpg" in _db_url, "DATABASE_URL must use postgresql+asyncpg for async engine"
 engine = create_async_engine(
-    Config.DATABASE_URL,
+    _db_url,
     echo=False,  # Установить True для отладки SQL запросов
     future=True,
     pool_pre_ping=True,   # Проверка соединения перед использованием (устойчивость к обрывам)

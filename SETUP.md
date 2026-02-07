@@ -543,12 +543,12 @@ ADMIN_IDS=123456789,987654321
 В корне проекта есть **Dockerfile** и **.dockerignore** — Railway соберёт образ с WeasyPrint (Cairo/Pango).
 
 1. Зарегистрируйтесь на [railway.app](https://railway.app), создайте проект.
-2. Добавьте **PostgreSQL**: в проекте нажмите **Add Service** → **Database** → **PostgreSQL**. В настройках PostgreSQL скопируйте переменную `DATABASE_URL` (формат `postgresql://...`). Для приложения замените схему на **`postgresql+asyncpg://`** (в начале URL).
+2. Добавьте **PostgreSQL**: в проекте нажмите **Add Service** → **Database** → **PostgreSQL**.
 3. Добавьте сервис из репозитория: **Add Service** → **GitHub Repo** → выберите **DentShare/Mystom** (или ваш репо). Railway определит Dockerfile и соберёт образ.
 4. В настройках **сервиса бота** (не БД) откройте **Variables** и задайте:
    - `BOT_TOKEN` — токен от @BotFather
    - `ADMIN_IDS` — один или несколько Telegram ID через запятую (например `123456789`)
-   - `DATABASE_URL` — скопируйте из сервиса PostgreSQL и замените в начале `postgresql://` на `postgresql+asyncpg://`
+   - **`DATABASE_URL`** — скопируйте из сервиса PostgreSQL переменную **`DATABASE_PUBLIC_URL`** (хост вида `*.proxy.rlwy.net`). Если в карточке БД есть только `DATABASE_URL` с хостом `*.railway.internal` и при старте появляется ошибка «could not translate host name», снова откройте PostgreSQL → **Variables** → скопируйте **`DATABASE_PUBLIC_URL`** (или переименованный публичный URL) и используйте его. В начале URL замените `postgresql://` на **`postgresql+asyncpg://`**.
    - По желанию: `ADMIN_WEBAPP_URL`, `TIMEZONE_API_KEY`
 5. **Сборка**: в разделе **Settings** сервиса убедитесь, что используется **Dockerfile** (Root Directory — пусто, Dockerfile path — `Dockerfile`). При пуше в GitHub деплой запустится автоматически.
 6. Сервис бота не открывает HTTP-порт — это нормально. Оставьте тип сервиса как есть; бот работает по long polling. Деплой — при пуше в GitHub; сервис по умолчанию «всегда включён».
@@ -569,6 +569,50 @@ ADMIN_IDS=123456789,987654321
 - **Хочется деплой из GitHub без своего сервера** → Railway или Render с Docker и встроенным PostgreSQL.
 
 После настройки любой из вариантов бот может работать **24/7** с учётом всех требований (Python, PostgreSQL, WeasyPrint, при необходимости веб-админка по HTTPS).
+
+---
+
+## Устранение неполадок
+
+### Ошибка: `connection to server at "localhost", port 5432 failed: Connection refused`
+
+Эта ошибка возникает при запуске **в Docker** (Railway, Render и т.п.) или когда PostgreSQL недоступен.
+
+**Причина:** приложение подключается к `localhost:5432`, но:
+- **В контейнере** `localhost` — это сам контейнер, а PostgreSQL работает в другом сервисе (другой контейнер или внешний хост). Нужен хост из переменной окружения, а не `localhost`.
+- **Локально** — PostgreSQL не запущен или слушает другой порт.
+
+**Что сделать:**
+
+1. **Railway / Render (деплой из Docker):**
+   - В настройках **сервиса бота** (Variables) обязательно задайте `DATABASE_URL` из добавленного в проект **PostgreSQL** (Add Service → Database → PostgreSQL).
+   - Не используйте `localhost` в URL. Скопируйте `DATABASE_URL` из карточки PostgreSQL и в начале замените `postgresql://` на `postgresql+asyncpg://`.
+   - Убедитесь, что сервис PostgreSQL запущен и в одном проекте с ботом (внутренняя сеть).
+
+2. **Локально (Windows / Linux / macOS):**
+   - Запустите PostgreSQL (например: `sudo systemctl start postgresql` или запуск из панели/дистрибутива).
+   - В `.env` укажите хост `127.0.0.1` или `localhost` и порт `5432`, если БД на этой же машине.
+
+3. **Docker Compose (если позже добавите):**
+   - В `DATABASE_URL` используйте **имя сервиса** БД как хост (например `postgres` или `db`), а не `localhost`:  
+     `postgresql+asyncpg://user:password@postgres:5432/ministom`.
+
+После исправления `DATABASE_URL` перезапустите сервис (на Railway — Redeploy).
+
+---
+
+### Ошибка: `could not translate host name "Postgres.railway.internal" to address: Name or service not known`
+
+На Railway внутренний хост `*.railway.internal` не всегда доступен при старте контейнера (миграции выполняются в `CMD` до запуска бота), поэтому DNS не находит этот хост.
+
+**Что сделать:** в сервисе бота в переменной **`DATABASE_URL`** используйте **публичный** URL БД, а не внутренний:
+
+1. Откройте в проекте сервис **PostgreSQL** → вкладка **Variables** (или **Connect**).
+2. Найдите переменную **`DATABASE_PUBLIC_URL`** — в ней хост вида `xxxxx.proxy.rlwy.net` и порт (часто не 5432). Скопируйте значение.
+3. В сервисе **бота** в **Variables** задайте или замените **`DATABASE_URL`**: вставьте скопированный URL и в **начале** замените `postgresql://` на `postgresql+asyncpg://`.
+4. Сохраните и сделайте **Redeploy** сервиса бота.
+
+Публичный URL резолвится при любом этапе жизни контейнера; внутренний (`*.railway.internal`) оставьте для сценариев, где приватная сеть уже гарантированно доступна.
 
 ---
 
