@@ -17,6 +17,7 @@ def validate_init_data(init_data: str, bot_token: str) -> Optional[int]:
     Важно: data_check_string собирается из исходной строки (пары key=value как есть),
     без URL-декодирования — иначе подпись не сойдётся.
     """
+    bot_token = (bot_token or "").strip()
     if not init_data or not bot_token:
         logger.warning(
             "validate_init_data: пустые данные — init_data=%s, bot_token_set=%s",
@@ -44,7 +45,7 @@ def validate_init_data(init_data: str, bot_token: str) -> Optional[int]:
 
         # secret_key = HMAC-SHA256(token, "WebAppData")
         secret_key = hmac.new(
-            bot_token.encode(), b"WebAppData", hashlib.sha256
+            bot_token.encode("utf-8"), b"WebAppData", hashlib.sha256
         ).digest()
         # calculated_hash = HMAC-SHA256(secret_key, data_check_string)
         calculated = hmac.new(
