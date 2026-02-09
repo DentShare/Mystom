@@ -50,6 +50,9 @@ def validate_init_data(init_data: str, bot_token: str) -> Optional[int]:
             key, _, value = part.partition("=")
             if key == "hash":
                 hash_val = value
+            elif key == "signature":
+                # Часть клиентов присылают signature — в data_check_string не включаем (подпись считали без него)
+                pass
             else:
                 pairs_raw.append((key, value))
         if not hash_val:
