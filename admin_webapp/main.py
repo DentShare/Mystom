@@ -2,6 +2,7 @@
 Веб-админка MiniStom: список пользователей, уровни подписки, сроки.
 Запуск из корня проекта: uvicorn admin_webapp.main:app --reload --port 8001
 """
+import logging
 import sys
 from pathlib import Path
 
@@ -26,7 +27,20 @@ from app.database.models import User
 
 from admin_webapp.auth import validate_init_data
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger("admin_webapp")
+
 app = FastAPI(title="MiniStom Admin")
+
+# Лог конфигурации при старте (для отладки)
+logger.info(
+    "Конфигурация: BOT_TOKEN=%s, ADMIN_IDS=%s",
+    "задан" if Config.BOT_TOKEN else "НЕ ЗАДАН",
+    Config.ADMIN_IDS,
+)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 STATIC_DIR.mkdir(exist_ok=True)
@@ -42,7 +56,30 @@ async def get_db() -> AsyncSession:
 
 def require_admin(telegram_id: int) -> None:
     if telegram_id not in Config.ADMIN_IDS:
+        logger.warning(
+            "require_admin: доступ запрещён — telegram_id=%s не в ADMIN_IDS=%s",
+            telegram_id,
+            Config.ADMIN_IDS,
+        )
         raise HTTPException(status_code=403, detail="Access denied")
+
+
+def _check_admin_auth(
+    endpoint: str,
+    x_telegram_init_data: Optional[str],
+) -> int:
+    """Проверка initData и прав админа. Возвращает telegram_id или raises HTTPException."""
+    if not x_telegram_init_data:
+        logger.warning("[%s] заголовок X-Telegram-Init-Data отсутствует", endpoint)
+        raise HTTPException(status_code=401, detail="Missing initData")
+    logger.info("[%s] initData получен, len=%d", endpoint, len(x_telegram_init_data))
+    user_id = validate_init_data(x_telegram_init_data, Config.BOT_TOKEN)
+    if user_id is None:
+        logger.warning("[%s] validate_init_data вернул None", endpoint)
+        raise HTTPException(status_code=401, detail="Invalid initData")
+    require_admin(user_id)
+    logger.info("[%s] авторизация OK, user_id=%s", endpoint, user_id)
+    return user_id
 
 
 @app.get("/api/me")
@@ -51,12 +88,7 @@ async def api_me(
     x_telegram_init_data: Optional[str] = Header(None),
 ):
     """Проверка авторизации: возвращает user_id если initData валиден и пользователь админ."""
-    if not x_telegram_init_data:
-        raise HTTPException(status_code=401, detail="Missing initData")
-    user_id = validate_init_data(x_telegram_init_data, Config.BOT_TOKEN)
-    if user_id is None:
-        raise HTTPException(status_code=401, detail="Invalid initData")
-    require_admin(user_id)
+    user_id = _check_admin_auth("api_me", x_telegram_init_data)
     return {"telegram_id": user_id, "ok": True}
 
 
@@ -67,12 +99,7 @@ async def api_list_users(
     x_telegram_init_data: Optional[str] = Header(None),
 ):
     """Список пользователей (только для админов)."""
-    if not x_telegram_init_data:
-        raise HTTPException(status_code=401, detail="Missing initData")
-    user_id = validate_init_data(x_telegram_init_data, Config.BOT_TOKEN)
-    if user_id is None:
-        raise HTTPException(status_code=401, detail="Invalid initData")
-    require_admin(user_id)
+    _check_admin_auth("api_users", x_telegram_init_data)
 
     result = await db.execute(
         select(User).order_by(User.created_at.desc()).limit(200)
@@ -109,12 +136,7 @@ async def api_update_user(
     x_telegram_init_data: Optional[str] = Header(None),
 ):
     """Обновить уровень подписки и/или дату окончания (только админ)."""
-    if not x_telegram_init_data:
-        raise HTTPException(status_code=401, detail="Missing initData")
-    admin_telegram_id = validate_init_data(x_telegram_init_data, Config.BOT_TOKEN)
-    if admin_telegram_id is None:
-        raise HTTPException(status_code=401, detail="Invalid initData")
-    require_admin(admin_telegram_id)
+    _check_admin_auth("api_update_user", x_telegram_init_data)
 
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
