@@ -119,7 +119,7 @@
       try {
         const r = await fetch(API_BASE + '/api/users', { headers: headers() });
         if (r.status === 401) {
-          content.innerHTML = '<p class="msg error">Не авторизован. Вы открыли из бота? Тогда в Railway у сервиса админки (industrious-insight) в Variables задайте BOT_TOKEN — тот же, что у сервиса бота (Mystom). Сохраните и сделайте Redeploy.</p>';
+          content.innerHTML = '<p class="msg error">Не авторизован. Откройте админку из бота: /admin → кнопка «Админка (Web App)». Если уже открываете из бота: в Railway у сервиса, который отдаёт эту страницу, в Variables должен быть тот же BOT_TOKEN, что и у сервиса бота. Один сервис (бот+админка) — токен один; два сервиса — скопируйте BOT_TOKEN из сервиса бота в сервис админки и сделайте Redeploy.</p>';
           return;
         }
         if (r.status === 403) {
