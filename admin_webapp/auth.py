@@ -11,12 +11,14 @@ logger = logging.getLogger(__name__)
 
 
 def _verify_signature(init_data: str, data_check_string: str, hash_val: str, bot_token: str) -> bool:
-    """Проверяет подпись. Возвращает True если hash совпадает."""
+    """Проверяет подпись. Возвращает True если hash совпадает.
+    По док. Telegram: secret_key = HMAC-SHA256(key='WebAppData', message=bot_token).
+    """
     bot_token = (bot_token or "").strip()
     if not bot_token:
         return False
     secret_key = hmac.new(
-        bot_token.encode("utf-8"), b"WebAppData", hashlib.sha256
+        b"WebAppData", bot_token.encode("utf-8"), hashlib.sha256
     ).digest()
     calculated = hmac.new(
         secret_key, data_check_string.encode("utf-8"), hashlib.sha256
@@ -41,7 +43,7 @@ def validate_init_data(init_data: str, bot_token: str) -> Optional[int]:
         )
         return None
     try:
-        # Собираем data_check_string из исходной строки (значения не декодируем)
+        # Собираем data_check_string: пары key=value без hash/signature, значения URL-декодируем (как в док. Telegram)
         pairs_raw = []
         hash_val = None
         for part in init_data.split("&"):
@@ -51,10 +53,10 @@ def validate_init_data(init_data: str, bot_token: str) -> Optional[int]:
             if key == "hash":
                 hash_val = value
             elif key == "signature":
-                # Часть клиентов присылают signature — в data_check_string не включаем (подпись считали без него)
+                # Часть клиентов присылают signature — в data_check_string не включаем
                 pass
             else:
-                pairs_raw.append((key, value))
+                pairs_raw.append((key, unquote(value)))
         if not hash_val:
             logger.warning("validate_init_data: отсутствует hash в initData")
             return None
@@ -83,7 +85,7 @@ def validate_init_data(init_data: str, bot_token: str) -> Optional[int]:
             else:
                 # Вычисляем хеш для лога (с переданным токеном)
                 secret_key = hmac.new(
-                    bot_token.encode("utf-8"), b"WebAppData", hashlib.sha256
+                    b"WebAppData", bot_token.encode("utf-8"), hashlib.sha256
                 ).digest()
                 calculated = hmac.new(
                     secret_key, data_check_string.encode("utf-8"), hashlib.sha256

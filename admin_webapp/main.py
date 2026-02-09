@@ -81,6 +81,7 @@ def _check_admin_auth(
 ) -> int:
     """Проверка initData и прав админа. Возвращает telegram_id или raises HTTPException."""
     if request_host is not None:
+        print(f"[admin_webapp] {endpoint} — запрос с Host={request_host}", flush=True)
         logger.info("[%s] запрос с Host=%s", endpoint, request_host)
     if not x_telegram_init_data:
         logger.warning("[%s] 401: заголовок X-Telegram-Init-Data отсутствует или пустой", endpoint)
@@ -190,7 +191,9 @@ async def api_update_user(
 # Раздача статики (index.html и т.д.)
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    logger.info("GET / запрос, Host=%s", request.headers.get("host", "(нет)"))
+    host = request.headers.get("host", "(нет)")
+    print(f"[admin_webapp] GET / — открыта главная, Host={host}", flush=True)
+    logger.info("GET / запрос, Host=%s", host)
     path = STATIC_DIR / "index.html"
     if not path.exists():
         raise HTTPException(status_code=404, detail="index.html not found")
