@@ -27,11 +27,14 @@ from app.database.models import User
 
 from admin_webapp.auth import validate_init_data
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
+# Логи в stdout, чтобы в Railway INFO не помечались как "error" (stderr = error в UI)
+_log_fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+_handler = logging.StreamHandler(sys.stdout)
+_handler.setFormatter(logging.Formatter(_log_fmt))
 logger = logging.getLogger("admin_webapp")
+logger.setLevel(logging.INFO)
+logger.addHandler(_handler)
+logger.propagate = False
 
 app = FastAPI(title="MiniStom Admin")
 
