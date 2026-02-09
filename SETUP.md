@@ -560,10 +560,11 @@ ADMIN_IDS=123456789,987654321
 3. **Build**: тот же Dockerfile, что и у бота (образ с полным проектом).
 4. **Start Command** (в Settings сервиса) задайте вручную, чтобы запускалась админка, а не бот:
    ```bash
-   uvicorn admin_webapp.main:app --host 0.0.0.0 --port $PORT
+   python -m admin_webapp.run_web
    ```
+   Не используйте `uvicorn ... --port $PORT`: Railway может не подставлять переменную, и появится ошибка «'$PORT' is not a valid integer». Скрипт `run_web` читает `PORT` из окружения сам.
 5. **Variables** у этого сервиса: `BOT_TOKEN`, `ADMIN_IDS`, `DATABASE_URL` (с `postgresql+asyncpg://` — скопировать из PostgreSQL).
-6. **Networking** → **Generate Service Domain** → порт укажите тот же, на котором слушает приложение (значение `$PORT`, обычно **8080** или **3000**). Скопируйте полученный URL.
+6. **Networking** → **Generate Service Domain** → порт укажите тот же, на котором слушает приложение (Railway задаёт переменную `PORT`, обычно **8080**). Скопируйте полученный URL.
 7. В сервисе **бота** в Variables добавьте **`ADMIN_WEBAPP_URL`** = этот URL (например `https://ваш-админ-сервис.up.railway.app`), сохраните и сделайте **Redeploy** бота.
 
 Админку (FastAPI) можно развернуть вторым сервисом в том же проекте и задать для бота `ADMIN_WEBAPP_URL` на URL этого сервиса (Railway даёт HTTPS).
@@ -599,8 +600,8 @@ ADMIN_IDS=123456789,987654321
 
 1. Сервис админки должен быть **из того же репозитория и того же образа**, что и бот, но с **другой** Start Command (uvicorn). **Root Directory** должен быть **пустым** — если указан `admin_webapp`, в сборке не будет папки `app/`, приложение упадёт при импорте и домен не откроется.
 2. В настройках сервиса админки проверьте **Start Command**:  
-   `uvicorn admin_webapp.main:app --host 0.0.0.0 --port $PORT`
-3. **Generate Service Domain**: порт должен совпадать с тем, на котором слушает приложение (то же, что подставляет `$PORT`, обычно **8080** или **3000**).
+   `python -m admin_webapp.run_web`
+3. **Generate Service Domain**: порт должен совпадать с тем, на котором слушает приложение (Railway задаёт `PORT`, обычно **8080**).
 4. В **Deployments** сервиса админки откройте последний деплой и посмотрите **логи**: если при старте есть ошибка (например `ModuleNotFoundError: No module named 'app'`) — значит, сборка идёт из неправильной директории; уберите Root Directory и задайте Start Command как выше.
 5. После исправлений сделайте **Redeploy** сервиса админки и снова откройте ссылку.
 

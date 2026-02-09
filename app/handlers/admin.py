@@ -39,8 +39,10 @@ async def cmd_admin(message: Message):
         "Ваш ID: {} (должен быть в ADMIN_IDS)\n\n"
         "Команды:\n"
         "• /admin_list_users — список пользователей\n"
-        "• /admin_set_tier telegram_id 0 или 1 или 2 — уровень без срока\n"
-        "• /admin_set_subscription telegram_id tier дни — уровень и срок\n\n"
+        "• /admin_set_tier telegram_id 0|1|2 — уровень без срока\n"
+        "• /admin_set_subscription telegram_id tier дни — уровень и срок\n"
+        "• /admin_send telegram_id текст — личное сообщение пользователю\n"
+        "• /admin_broadcast текст — сообщение всем пользователям\n\n"
         "Уровни: 0=Basic, 1=Standard, 2=Premium.\n"
         "Telegram ID смотрите в списке пользователей."
     ).format(message.from_user.id)
@@ -166,4 +168,94 @@ async def cmd_list_users(message: Message, db_session: AsyncSession):
         name = (u.full_name or "").strip() or "—"
         text_parts.append(f"👤 {name}\n   ID: {u.telegram_id} · {tier_name}{end}\n")
     await message.answer("\n".join(text_parts), parse_mode=None)
+
+
+@router.message(Command("admin_send", "adminsend"))
+async def cmd_admin_send(message: Message, db_session: AsyncSession):
+    """Отправить личное сообщение пользователю по telegram_id."""
+    if message.from_user and message.from_user.id not in Config.ADMIN_IDS:
+        await message.answer("❌ Доступ запрещен")
+        return
+
+    args = message.text.split(maxsplit=2)  # команда, telegram_id, остальное — текст
+    if len(args) < 3:
+        await message.answer(
+            "Использование: /admin_send <telegram_id> <текст>\n"
+            "Пример: /admin_send 123456789 Добрый день! Напоминаем о записи.",
+            parse_mode=None,
+        )
+        return
+
+    try:
+        target_id = int(args[1])
+        text = args[2].strip()
+    except ValueError:
+        await message.answer("❌ telegram_id должен быть числом.")
+        return
+
+    if not text:
+        await message.answer("❌ Текст сообщения не может быть пустым.")
+        return
+
+    # Проверяем, что пользователь есть в БД (опционально; можно слать и не из БД)
+    stmt = select(User).where(User.telegram_id == target_id)
+    result = await db_session.execute(stmt)
+    user = result.scalar_one_or_none()
+
+    try:
+        await message.bot.send_message(chat_id=target_id, text=text, parse_mode=None)
+        name = (user.full_name or "").strip() if user else "—"
+        await message.answer(
+            f"✅ Сообщение отправлено пользователю {name} (ID: {target_id}).",
+            parse_mode=None,
+        )
+    except Exception as e:
+        await message.answer(
+            f"❌ Не удалось отправить (возможно, пользователь заблокировал бота или чат удалён): {e!r}",
+            parse_mode=None,
+        )
+
+
+@router.message(Command("admin_broadcast", "adminbroadcast"))
+async def cmd_admin_broadcast(message: Message, db_session: AsyncSession):
+    """Разослать сообщение всем пользователям из БД."""
+    if message.from_user and message.from_user.id not in Config.ADMIN_IDS:
+        await message.answer("❌ Доступ запрещен")
+        return
+
+    text = message.text.split(maxsplit=1)[-1].strip() if message.text else ""
+    if not text:
+        await message.answer(
+            "Использование: /admin_broadcast <текст>\n"
+            "Всё после команды будет отправлено всем пользователям.",
+            parse_mode=None,
+        )
+        return
+
+    stmt = select(User.telegram_id).distinct()
+    result = await db_session.execute(stmt)
+    user_ids = [row[0] for row in result.fetchall()]
+
+    # Не слать админам и себе, если не нужно — можно убрать фильтр
+    admin_ids_set = set(Config.ADMIN_IDS)
+    to_send = [uid for uid in user_ids if uid not in admin_ids_set]
+
+    if not to_send:
+        await message.answer("📋 Нет пользователей для рассылки (кроме админов).")
+        return
+
+    sent = 0
+    failed = 0
+    status_msg = await message.answer(f"📤 Рассылка: {len(to_send)} получателей…")
+    for uid in to_send:
+        try:
+            await message.bot.send_message(chat_id=uid, text=text, parse_mode=None)
+            sent += 1
+        except Exception:
+            failed += 1
+
+    await status_msg.edit_text(
+        f"✅ Рассылка завершена.\nОтправлено: {sent}, не доставлено: {failed}.",
+        parse_mode=None,
+    )
 
