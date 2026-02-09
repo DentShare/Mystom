@@ -51,6 +51,7 @@
 </head>
 <body>
   <h1>🛠 Админка — пользователи подписки</h1>
+  <div id="debug" class="msg" style="font-size:12px;background:var(--tg-theme-secondary-bg-color,#eee);display:none;"></div>
   <div id="msg"></div>
   <div class="toolbar">
     <button type="button" id="btnRefresh">Обновить список</button>
@@ -67,8 +68,26 @@
     }
 
     const API_BASE = window.location.origin;
+    const DEBUG = true;  // отладка initData — поставьте false после выяснения проблемы
+
     function getInitData() {
       return Telegram?.initData || '';
+    }
+
+    function updateDebugInfo() {
+      if (!DEBUG) return;
+      const init = getInitData();
+      const len = init ? init.length : 0;
+      const ok = len >= 10;
+      const txt = 'initData: len=' + len + (ok ? ' ✓' : ' — ПУСТО или слишком короткий. Откройте из бота!');
+      const el = document.getElementById('debug');
+      if (el) {
+        el.textContent = txt;
+        el.style.display = 'block';
+        el.className = 'msg ' + (ok ? 'ok' : 'error');
+      }
+      console.log('[MiniStom Admin] initData length:', len, ok ? '(OK)' : '(EMPTY/TOO SHORT)');
+      if (init && len <= 200) console.log('[MiniStom Admin] initData (truncated):', init.substring(0, 80) + '...');
     }
 
     function headers() {
@@ -89,6 +108,7 @@
     const TIER_NAMES = { 0: 'Basic', 1: 'Standard', 2: 'Premium' };
 
     async function loadUsers() {
+      updateDebugInfo();
       const content = document.getElementById('content');
       content.innerHTML = '<p class="loading">Загрузка…</p>';
       var initData = getInitData();
@@ -184,6 +204,11 @@
     }
 
     document.getElementById('btnRefresh').addEventListener('click', loadUsers);
+
+    updateDebugInfo();
+    if (Telegram) {
+      Telegram.onEvent('themeChanged', updateDebugInfo);
+    }
     loadUsers();
   </script>
 </body>
