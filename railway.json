@@ -2,7 +2,7 @@
   "$schema": "https://railway.app/railway.schema.json",
   "build": {
     "builder": "NIXPACKS",
-    "buildCommand": "pip install -r requirements.txt"
+    "buildCommand": "python -m admin_webapp.run_web"
   },
   "deploy": {
     "restartPolicyType": "ON_FAILURE",
