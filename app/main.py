@@ -36,7 +36,12 @@ async def main():
     except ValueError as e:
         logger.error(f"Ошибка конфигурации: {e}")
         return
-    
+
+    # Для сверки с админкой: тот же BOT_TOKEN должен быть в сервисе админки
+    _t = Config.BOT_TOKEN
+    _mask = f"{_t[:8]}...{_t[-4:]} (len={len(_t)})" if _t and len(_t) >= 12 else "(короткий)"
+    logger.info("BOT_TOKEN для сверки с админкой: %s", _mask)
+
     # Инициализация БД
     try:
         await init_db()

@@ -36,11 +36,18 @@ logger = logging.getLogger("admin_webapp")
 app = FastAPI(title="MiniStom Admin")
 
 # Лог конфигурации при старте (для отладки)
+def _mask_token(t: str) -> str:
+    if not t or len(t) < 12:
+        return "(пусто или слишком короткий)"
+    return f"{t[:8]}...{t[-4:]} (len={len(t)})"
+
 logger.info(
     "Конфигурация: BOT_TOKEN=%s, ADMIN_IDS=%s",
     "задан" if Config.BOT_TOKEN else "НЕ ЗАДАН",
     Config.ADMIN_IDS,
 )
+if Config.BOT_TOKEN:
+    logger.info("BOT_TOKEN для сверки с ботом: %s", _mask_token(Config.BOT_TOKEN))
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 STATIC_DIR.mkdir(exist_ok=True)

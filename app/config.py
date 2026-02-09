@@ -11,8 +11,8 @@ load_dotenv(dotenv_path=_env_path)
 class Config:
     """Конфигурация приложения"""
     
-    # Telegram Bot
-    BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
+    # Telegram Bot (strip — в Railway при вставке часто попадают пробелы/перенос строки)
+    BOT_TOKEN: str = os.getenv("BOT_TOKEN", "").strip()
     
     # Database
     DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql+asyncpg://user:password@localhost:5432/ministom")
