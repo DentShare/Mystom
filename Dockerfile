@@ -21,6 +21,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Код приложения
 COPY . .
 
-# Миграции при старте; веб-админка слушает PORT (для Railway health check).
-# Бот и админка в одном процессе: uvicorn в фоне, затем бот.
-CMD ["sh", "-c", "alembic upgrade head && (python -m admin_webapp.run_web &) && python -m app.main"]
+# Единая точка входа: SERVICE_TYPE=web — только админка, иначе бот + админка в фоне.
+# В Railway для сервиса «только админка» задайте переменную SERVICE_TYPE=web, Start Command не меняйте.
+CMD ["python", "-m", "app.start"]

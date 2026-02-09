@@ -555,15 +555,13 @@ ADMIN_IDS=123456789,987654321
 
 **Развёртывание веб-админки на Railway (второй сервис):**
 
+Можно **не задавать** Start Command: образ по умолчанию запускается командой `python -m app.start`; если в Variables сервиса админки задать **`SERVICE_TYPE=web`**, запустится только веб-админка. Подробнее: [RAILWAY_ADMIN.md](RAILWAY_ADMIN.md).
+
 1. **Add Service** → **GitHub Repo** → тот же репозиторий.
 2. **Root Directory** оставьте **пустым** (не указывайте `admin_webapp` — иначе в образе не будет папки `app/` и сервис упадёт при старте).
 3. **Build**: тот же Dockerfile, что и у бота (образ с полным проектом).
-4. **Start Command** (в Settings сервиса) задайте вручную, чтобы запускалась админка, а не бот:
-   ```bash
-   python -m admin_webapp.run_web
-   ```
-   Не используйте `uvicorn ... --port $PORT`: Railway может не подставлять переменную, и появится ошибка «'$PORT' is not a valid integer». Скрипт `run_web` читает `PORT` из окружения сам.
-5. **Variables** у этого сервиса: `BOT_TOKEN`, `ADMIN_IDS`, `DATABASE_URL` (с `postgresql+asyncpg://` — скопировать из PostgreSQL).
+4. **Start Command** оставьте **пустым** и в **Variables** задайте **`SERVICE_TYPE=web`** — тогда будет использоваться команда из Dockerfile и запустится только админка. Либо (если не используете `app.start`) задайте вручную: `python -m admin_webapp.run_web`. Не используйте `uvicorn ... --port $PORT` — переменная может не подставиться, скрипт `run_web` читает `PORT` из окружения сам.
+5. **Variables** у этого сервиса: `SERVICE_TYPE=web`, `BOT_TOKEN`, `ADMIN_IDS`, `DATABASE_URL` (с `postgresql+asyncpg://` — скопировать из PostgreSQL).
 6. **Networking** → **Generate Service Domain** → порт укажите тот же, на котором слушает приложение (Railway задаёт переменную `PORT`, обычно **8080**). Скопируйте полученный URL.
 7. В сервисе **бота** в Variables добавьте **`ADMIN_WEBAPP_URL`** = этот URL (например `https://ваш-админ-сервис.up.railway.app`), сохраните и сделайте **Redeploy** бота.
 
@@ -598,9 +596,8 @@ ADMIN_IDS=123456789,987654321
 
 **Ссылка на админку не загружается в браузере (таймаут, ошибка соединения):**
 
-1. Сервис админки должен быть **из того же репозитория и того же образа**, что и бот, но с **другой** Start Command (uvicorn). **Root Directory** должен быть **пустым** — если указан `admin_webapp`, в сборке не будет папки `app/`, приложение упадёт при импорте и домен не откроется.
-2. В настройках сервиса админки проверьте **Start Command**:  
-   `python -m admin_webapp.run_web`
+1. Сервис админки должен быть **из того же репозитория и того же образа**, что и бот. **Root Directory** — **пустой**. Режим «только админка» задаётся переменной **`SERVICE_TYPE=web`** (Start Command можно не менять) или явной командой `python -m admin_webapp.run_web`.
+2. Если задаёте Start Command вручную: `python -m admin_webapp.run_web`. Либо оставьте Start Command пустым и задайте в Variables **`SERVICE_TYPE=web`**.
 3. **Generate Service Domain**: порт должен совпадать с тем, на котором слушает приложение (Railway задаёт `PORT`, обычно **8080**).
 4. В **Deployments** сервиса админки откройте последний деплой и посмотрите **логи**: если при старте есть ошибка (например `ModuleNotFoundError: No module named 'app'`) — значит, сборка идёт из неправильной директории; уберите Root Directory и задайте Start Command как выше.
 5. После исправлений сделайте **Redeploy** сервиса админки и снова откройте ссылку.
