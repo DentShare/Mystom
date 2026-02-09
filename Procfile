@@ -1,1 +1,1 @@
-web: sh -c 'uvicorn admin_webapp.main:app --host 0.0.0.0 --port ${PORT:-8000}'
+web: python -m admin_webapp.run_web

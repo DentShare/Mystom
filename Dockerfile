@@ -23,4 +23,4 @@ COPY . .
 
 # Миграции при старте; веб-админка слушает PORT (для Railway health check).
 # Бот и админка в одном процессе: uvicorn в фоне, затем бот.
-CMD ["sh", "-c", "alembic upgrade head && (uvicorn admin_webapp.main:app --host 0.0.0.0 --port ${PORT:-8000} &) && python -m app.main"]
+CMD ["sh", "-c", "alembic upgrade head && (python -m admin_webapp.run_web &) && python -m app.main"]
