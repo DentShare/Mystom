@@ -11,6 +11,7 @@ class AppointmentStates(StatesGroup):
     select_service_category = State()  # Выбор категории услуги
     select_service = State()  # Выбор услуги из категории
     enter_service = State()  # Текстовый ввод (если "Другое")
+    enter_discount = State()  # Premium: скидка на услугу при записи через расписание
     enter_tooth_number = State()  # Premium, опционально
     enter_price = State()  # Premium: сумма, скидка, способ оплаты
 

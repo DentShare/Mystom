@@ -26,7 +26,7 @@ from app.services.service_service import (
     get_service_by_id,
     CATEGORIES,
 )
-from app.utils.formatters import format_money
+from app.utils.formatters import format_money, treatment_effective_price
 from app.states.patient import PatientStates
 from app.keyboards.main import get_cancel_keyboard, get_main_menu_keyboard
 from sqlalchemy import select, and_
@@ -412,14 +412,24 @@ async def process_time_selection(
             return
         await state.update_data(rescheduling_appointment_id=None)
     
-    # Standard+: уже выбраны пациент и услуга — создаём запись
+    # Standard+: уже выбраны пациент и услуга — для Premium с ценой спрашиваем скидку
     if data.get("service_name") or data.get("service_id"):
         service_id = data.get("service_id")
         service_name = data.get("service_name", "")
-        service_price = data.get("service_price", 0)
+        service_price = data.get("service_price") or 0
         duration_minutes = data.get("service_duration_minutes", 30)
         patient_id = data.get("patient_id")
         location_id = data.get("location_id")
+
+        if user.subscription_tier >= 2 and service_price and float(service_price) > 0:
+            await state.update_data(appointment_datetime=appointment_datetime)
+            await callback.message.edit_text(
+                f"📝 Услуга: **{service_name}** — {format_money(service_price)}\n\n"
+                "💸 Скидка на эту услугу: введите **процент** (например 10 или 10%) или **сумму** (например 50 000), или /skip — без скидки:"
+            )
+            await state.set_state(AppointmentStates.enter_discount)
+            await callback.answer()
+            return
 
         appointment = Appointment(
             doctor_id=user.id,
@@ -464,6 +474,94 @@ async def process_time_selection(
     )
     await state.set_state(AppointmentStates.enter_patient_name)
     await callback.answer()
+
+
+@router.message(StateFilter(AppointmentStates.enter_discount), F.text)
+async def process_appointment_discount(
+    message: Message,
+    user: User,
+    state: FSMContext,
+    db_session: AsyncSession
+):
+    """Скидка на услугу при записи через расписание (Premium): процент, сумма или /skip"""
+    text = (message.text or "").strip().lower()
+    if text == "/skip" or not text:
+        discount_percent = None
+        discount_amount = None
+    else:
+        discount_percent = None
+        discount_amount = None
+        if "%" in message.text:
+            try:
+                num_str = message.text.replace("%", "").replace(",", ".").strip()
+                discount_percent = float(num_str)
+                if discount_percent < 0 or discount_percent > 100:
+                    await message.answer("❌ Процент скидки от 0 до 100. Попробуйте снова:")
+                    return
+            except ValueError:
+                await message.answer("❌ Введите процент (например 10 или 10%) или сумму, или /skip:")
+                return
+        else:
+            try:
+                num_str = message.text.replace(" ", "").replace(",", ".").strip()
+                discount_amount = float(num_str)
+                if discount_amount < 0:
+                    await message.answer("❌ Сумма скидки не может быть отрицательной:")
+                    return
+            except ValueError:
+                await message.answer("❌ Введите число (сумма скидки в сумах), процент (10%) или /skip:")
+                return
+
+    data = await state.get_data()
+    appointment_datetime = data.get("appointment_datetime")
+    service_id = data.get("service_id")
+    service_name = data.get("service_name", "")
+    service_price = float(data.get("service_price") or 0)
+    duration_minutes = data.get("service_duration_minutes", 30)
+    patient_id = data.get("patient_id")
+    location_id = data.get("location_id")
+
+    if not appointment_datetime or not patient_id:
+        await message.answer("❌ Ошибка: не указаны дата или пациент. Начните запись заново.")
+        await state.clear()
+        return
+
+    appointment = Appointment(
+        doctor_id=user.id,
+        patient_id=patient_id,
+        service_id=service_id,
+        location_id=location_id,
+        date_time=appointment_datetime,
+        duration_minutes=duration_minutes,
+        service_description=service_name,
+        status="planned"
+    )
+    db_session.add(appointment)
+    await db_session.commit()
+    await db_session.refresh(appointment)
+
+    treatment = Treatment(
+        patient_id=patient_id,
+        doctor_id=user.id,
+        appointment_id=appointment.id,
+        service_name=service_name,
+        price=service_price,
+        discount_percent=discount_percent,
+        discount_amount=discount_amount,
+    )
+    db_session.add(treatment)
+    await db_session.commit()
+
+    eff = treatment_effective_price(service_price, discount_percent, discount_amount)
+    msg = (
+        f"✅ Запись создана!\n\n"
+        f"📅 Дата: {appointment_datetime.strftime('%d.%m.%Y %H:%M')}\n"
+        f"📝 {service_name} — итого {format_money(eff)}"
+    )
+    if discount_percent or discount_amount:
+        msg += " (со скидкой)"
+    await message.answer(msg)
+    await state.clear()
 
 
 @router.message(StateFilter(AppointmentStates.enter_patient_name))
