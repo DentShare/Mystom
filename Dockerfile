@@ -21,5 +21,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Код приложения
 COPY . .
 
-# Миграции выполняются при старте; точка входа — бот
-CMD ["sh", "-c", "alembic upgrade head && python -m app.main"]
+# Миграции при старте; веб-админка слушает PORT (для Railway health check).
+# Бот и админка в одном процессе: uvicorn в фоне, затем бот.
+CMD ["sh", "-c", "alembic upgrade head && (uvicorn admin_webapp.main:app --host 0.0.0.0 --port ${PORT:-8000} &) && python -m app.main"]
