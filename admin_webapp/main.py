@@ -83,12 +83,12 @@ def _check_admin_auth(
     if request_host is not None:
         logger.info("[%s] запрос с Host=%s", endpoint, request_host)
     if not x_telegram_init_data:
-        logger.warning("[%s] заголовок X-Telegram-Init-Data отсутствует", endpoint)
+        logger.warning("[%s] 401: заголовок X-Telegram-Init-Data отсутствует или пустой", endpoint)
         raise HTTPException(status_code=401, detail="Missing initData")
     logger.info("[%s] initData получен, len=%d", endpoint, len(x_telegram_init_data))
     user_id = validate_init_data(x_telegram_init_data, Config.BOT_TOKEN)
     if user_id is None:
-        logger.warning("[%s] validate_init_data вернул None", endpoint)
+        logger.warning("[%s] 401: validate_init_data вернул None (неверная подпись или нет user)", endpoint)
         raise HTTPException(status_code=401, detail="Invalid initData")
     require_admin(user_id)
     logger.info("[%s] авторизация OK, user_id=%s", endpoint, user_id)

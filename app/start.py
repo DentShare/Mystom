@@ -30,10 +30,11 @@ def main() -> None:
         check=True,
         cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     )
+    # stdout/stderr не отбрасываем — логи веб-админки должны попадать в Deploy Logs (401, validate_init_data и т.д.)
     proc = subprocess.Popen(
         [sys.executable, "-m", "admin_webapp.run_web"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=None,
+        stderr=None,
     )
     _log("Веб-админка запущена в фоне (PID=%s), порт из PORT=%s", proc.pid, port)
     try:
