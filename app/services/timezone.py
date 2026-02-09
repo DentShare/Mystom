@@ -1,5 +1,21 @@
+from datetime import datetime
 from typing import Optional
 import pytz
+
+
+def local_to_utc(naive_local: datetime, timezone_name: Optional[str]) -> datetime:
+    """
+    Трактует naive_local как локальное время в часовом поясе timezone_name
+    и возвращает наивный datetime в UTC (для сравнения с datetime.utcnow()).
+    Если timezone_name пустой или неизвестный — считаем время уже UTC.
+    """
+    if not timezone_name or not naive_local:
+        return naive_local
+    tz = get_timezone_by_name(timezone_name)
+    if not tz:
+        return naive_local
+    local = tz.localize(naive_local)
+    return local.astimezone(pytz.UTC).replace(tzinfo=None)
 
 
 def get_timezone_by_name(timezone_name: str) -> Optional[pytz.BaseTzInfo]:

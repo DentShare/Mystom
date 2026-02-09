@@ -1,4 +1,4 @@
-"""Сервис напоминаний о записях"""
+"""Сервис напоминаний о записях. Время записей в БД — локальное (врача); сервер в UTC."""
 import logging
 from datetime import datetime, timedelta
 from typing import List
@@ -8,6 +8,7 @@ from sqlalchemy import select, and_
 from sqlalchemy.orm import selectinload
 
 from app.database.models import Appointment, User, Patient
+from app.services.timezone import local_to_utc
 
 logger = logging.getLogger(__name__)
 
@@ -32,11 +33,12 @@ async def get_appointments_due_for_reminder(
 ) -> List[tuple[Appointment, User, int]]:
     """
     Найти записи, по которым пора отправить напоминание.
-    Возвращает список (appointment, doctor_user, reminder_minutes).
+    date_time в БД хранится как локальное время врача; сравнение с now в UTC.
     """
-    now = datetime.now()
-    # Будущие записи на ближайшие 25 часов (чтобы поймать напоминания за 24ч)
-    end_window = now + timedelta(hours=25)
+    now_utc = datetime.utcnow()
+    # Широкое окно: в БД — локальное время врача, точная проверка в цикле по UTC
+    start_window = now_utc - timedelta(hours=1)
+    end_window = now_utc + timedelta(hours=50)
 
     stmt = (
         select(Appointment, User)
@@ -49,7 +51,7 @@ async def get_appointments_due_for_reminder(
             and_(
                 Appointment.status == "planned",
                 Appointment.reminder_sent_at.is_(None),
-                Appointment.date_time > now,
+                Appointment.date_time > start_window,
                 Appointment.date_time <= end_window,
             )
         )
@@ -59,10 +61,13 @@ async def get_appointments_due_for_reminder(
 
     due = []
     for apt, doctor in rows:
+        # Время записи в БД — локальное у врача; переводим в UTC для сравнения
+        apt_utc = local_to_utc(apt.date_time, doctor.timezone)
+        if apt_utc <= now_utc:
+            continue  # запись уже в прошлом по UTC
         reminder_mins = get_reminder_minutes(doctor)
-        reminder_at = apt.date_time - timedelta(minutes=reminder_mins)
-        # Отправить, если текущее время >= времени напоминания (с допуском 1 мин)
-        if now >= reminder_at - timedelta(seconds=30):
+        reminder_at_utc = apt_utc - timedelta(minutes=reminder_mins)
+        if now_utc >= reminder_at_utc - timedelta(seconds=30):
             due.append((apt, doctor, reminder_mins))
 
     return due
