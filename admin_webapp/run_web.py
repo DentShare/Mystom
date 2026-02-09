@@ -4,10 +4,13 @@
 Запуск: python -m admin_webapp.run_web
 """
 import os
+import sys
 import uvicorn
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8000"))
+    print(f"[admin_webapp.run_web] Запуск uvicorn на 0.0.0.0:{port} (PORT из env)", flush=True)
+    sys.stdout.flush()
     uvicorn.run(
         "admin_webapp.main:app",
         host="0.0.0.0",

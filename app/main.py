@@ -41,6 +41,16 @@ async def main():
     _t = Config.BOT_TOKEN
     _mask = f"{_t[:8]}...{_t[-4:]} (len={len(_t)})" if _t and len(_t) >= 12 else "(короткий)"
     logger.info("BOT_TOKEN для сверки с админкой: %s", _mask)
+    _url = (getattr(Config, "ADMIN_WEBAPP_URL", None) or "").strip()
+    if _url:
+        try:
+            from urllib.parse import urlparse
+            _host = urlparse(_url).netloc or _url[:50]
+        except Exception:
+            _host = _url[:50]
+        logger.info("ADMIN_WEBAPP_URL для кнопки админки: host=%s", _host)
+    else:
+        logger.warning("ADMIN_WEBAPP_URL не задан — кнопка «Админка (Web App)» не будет показана")
 
     # Инициализация БД
     try:

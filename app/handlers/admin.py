@@ -9,7 +9,9 @@ from sqlalchemy import select
 from app.config import Config
 from app.database.models import User
 
+import logging
 router = Router(name="admin")
+_admin_log = logging.getLogger("app.handlers.admin")
 
 TIER_NAMES = {0: "Basic", 1: "Standard", 2: "Premium"}
 
@@ -48,15 +50,24 @@ async def cmd_admin(message: Message):
     ).format(message.from_user.id)
     builder = InlineKeyboardBuilder()
     admin_webapp_url = getattr(Config, "ADMIN_WEBAPP_URL", None) or ""
-    if admin_webapp_url.strip():
+    admin_webapp_url = admin_webapp_url.strip()
+    # Лог для отладки: на какой URL ведёт кнопка (в Railway должен совпадать с доменом этого сервиса)
+    if admin_webapp_url:
+        try:
+            from urllib.parse import urlparse
+            host = urlparse(admin_webapp_url).netloc or "(не удалось разобрать)"
+        except Exception:
+            host = "(ошибка разбора URL)"
+        _admin_log.info("Кнопка «Админка (Web App)»: ADMIN_WEBAPP_URL → host=%s", host)
+    if admin_webapp_url:
         builder.button(
             text="📱 Админка (Web App)",
-            web_app=WebAppInfo(url=admin_webapp_url.strip())
+            web_app=WebAppInfo(url=admin_webapp_url)
         )
     builder.adjust(1)
     await message.answer(
         help_text,
-        reply_markup=builder.as_markup() if admin_webapp_url.strip() else None,
+        reply_markup=builder.as_markup() if admin_webapp_url else None,
         parse_mode=None,
     )
 

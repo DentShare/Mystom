@@ -52,16 +52,13 @@ def validate_init_data(init_data: str, bot_token: str) -> Optional[int]:
             secret_key, data_check_string.encode("utf-8"), hashlib.sha256
         ).hexdigest()
         if not hmac.compare_digest(calculated, hash_val):
-            # Подсказка: в Railway у сервиса админки BOT_TOKEN должен быть скопирован из сервиса бота
-            # и совпадать побайтово (без лишних пробелов/переносов). После смены Variables — Redeploy.
-            token_repr = repr(bot_token)
-            if len(token_repr) > 60:
-                token_repr = token_repr[:50] + "…"
+            # Для отладки: первые символы хешей (не секрет)
             logger.warning(
-                "validate_init_data: неверная подпись — проверьте BOT_TOKEN (должен совпадать с токеном бота). "
-                "Токен после strip: len=%d, repr=%s",
+                "validate_init_data: неверная подпись. hash из initData: %s..., вычисленный: %s... (BOT_TOKEN len=%d, repr=%s)",
+                (hash_val or "")[:12],
+                calculated[:12],
                 len(bot_token),
-                token_repr,
+                repr(bot_token)[:50] + "…" if len(repr(bot_token)) > 50 else repr(bot_token),
             )
             return None
 

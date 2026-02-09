@@ -77,8 +77,11 @@ def require_admin(telegram_id: int) -> None:
 def _check_admin_auth(
     endpoint: str,
     x_telegram_init_data: Optional[str],
+    request_host: Optional[str] = None,
 ) -> int:
     """Проверка initData и прав админа. Возвращает telegram_id или raises HTTPException."""
+    if request_host is not None:
+        logger.info("[%s] запрос с Host=%s", endpoint, request_host)
     if not x_telegram_init_data:
         logger.warning("[%s] заголовок X-Telegram-Init-Data отсутствует", endpoint)
         raise HTTPException(status_code=401, detail="Missing initData")
@@ -98,7 +101,7 @@ async def api_me(
     x_telegram_init_data: Optional[str] = Header(None),
 ):
     """Проверка авторизации: возвращает user_id если initData валиден и пользователь админ."""
-    user_id = _check_admin_auth("api_me", x_telegram_init_data)
+    user_id = _check_admin_auth("api_me", x_telegram_init_data, request.headers.get("host"))
     return {"telegram_id": user_id, "ok": True}
 
 
@@ -109,7 +112,7 @@ async def api_list_users(
     x_telegram_init_data: Optional[str] = Header(None),
 ):
     """Список пользователей (только для админов)."""
-    _check_admin_auth("api_users", x_telegram_init_data)
+    _check_admin_auth("api_users", x_telegram_init_data, request.headers.get("host"))
 
     result = await db.execute(
         select(User).order_by(User.created_at.desc()).limit(200)
@@ -146,7 +149,7 @@ async def api_update_user(
     x_telegram_init_data: Optional[str] = Header(None),
 ):
     """Обновить уровень подписки и/или дату окончания (только админ)."""
-    _check_admin_auth("api_update_user", x_telegram_init_data)
+    _check_admin_auth("api_update_user", x_telegram_init_data, request.headers.get("host"))
 
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
@@ -186,7 +189,8 @@ async def api_update_user(
 
 # Раздача статики (index.html и т.д.)
 @app.get("/", response_class=HTMLResponse)
-async def index():
+async def index(request: Request):
+    logger.info("GET / запрос, Host=%s", request.headers.get("host", "(нет)"))
     path = STATIC_DIR / "index.html"
     if not path.exists():
         raise HTTPException(status_code=404, detail="index.html not found")

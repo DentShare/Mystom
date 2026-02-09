@@ -9,15 +9,21 @@ import os
 import subprocess
 import sys
 
+# Логи в stdout для Railway
+def _log(msg: str, *args: object) -> None:
+    print(f"[app.start] {msg % args}", flush=True)
+
 
 def main() -> None:
     service_type = (os.environ.get("SERVICE_TYPE") or "").strip().lower()
+    port = os.environ.get("PORT", "не задан")
 
     if service_type == "web":
-        # Только веб-админка: run_web сам читает PORT из окружения
+        _log("SERVICE_TYPE=web → запуск только веб-админки, PORT=%s", port)
         os.execv(sys.executable, [sys.executable, "-m", "admin_webapp.run_web"])
         return
 
+    _log("Режим бота: миграции, затем веб в фоне (PORT=%s), затем бот", port)
     # Режим бота: миграции, админка в фоне, затем бот
     subprocess.run(
         [sys.executable, "-m", "alembic", "upgrade", "head"],
@@ -29,6 +35,7 @@ def main() -> None:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+    _log("Веб-админка запущена в фоне (PID=%s), порт из PORT=%s", proc.pid, port)
     try:
         import asyncio
         from app.main import main as bot_main
