@@ -3,10 +3,25 @@ import hmac
 import hashlib
 import json
 import logging
+import os
 from urllib.parse import parse_qs, unquote
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _verify_signature(init_data: str, data_check_string: str, hash_val: str, bot_token: str) -> bool:
+    """Проверяет подпись. Возвращает True если hash совпадает."""
+    bot_token = (bot_token or "").strip()
+    if not bot_token:
+        return False
+    secret_key = hmac.new(
+        bot_token.encode("utf-8"), b"WebAppData", hashlib.sha256
+    ).digest()
+    calculated = hmac.new(
+        secret_key, data_check_string.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(calculated, hash_val)
 
 
 def validate_init_data(init_data: str, bot_token: str) -> Optional[int]:
@@ -42,25 +57,41 @@ def validate_init_data(init_data: str, bot_token: str) -> Optional[int]:
             return None
         pairs_raw.sort(key=lambda x: x[0])
         data_check_string = "\n".join(f"{k}={v}" for k, v in pairs_raw)
+        keys_in_order = [k for k, _ in pairs_raw]
+        logger.info(
+            "validate_init_data: data_check_string len=%d, keys=%s",
+            len(data_check_string),
+            keys_in_order,
+        )
 
-        # secret_key = HMAC-SHA256(token, "WebAppData")
-        secret_key = hmac.new(
-            bot_token.encode("utf-8"), b"WebAppData", hashlib.sha256
-        ).digest()
-        # calculated_hash = HMAC-SHA256(secret_key, data_check_string)
-        calculated = hmac.new(
-            secret_key, data_check_string.encode("utf-8"), hashlib.sha256
-        ).hexdigest()
-        if not hmac.compare_digest(calculated, hash_val):
-            # Для отладки: первые символы хешей (не секрет)
-            logger.warning(
-                "validate_init_data: неверная подпись. hash из initData: %s..., вычисленный: %s... (BOT_TOKEN len=%d, repr=%s)",
-                (hash_val or "")[:12],
-                calculated[:12],
-                len(bot_token),
-                repr(bot_token)[:50] + "…" if len(repr(bot_token)) > 50 else repr(bot_token),
-            )
-            return None
+        # Сначала пробуем переданный токен (из Config)
+        if _verify_signature(init_data, data_check_string, hash_val, bot_token):
+            pass  # OK below
+        else:
+            # При одном сервисе токен должен совпадать; пробуем os.environ на случай разницы Config vs env
+            env_token = (os.environ.get("BOT_TOKEN") or "").strip()
+            if env_token and env_token != bot_token and _verify_signature(init_data, data_check_string, hash_val, env_token):
+                logger.warning(
+                    "validate_init_data: подпись сошлась с os.environ BOT_TOKEN, но не с переданным (Config). len(env)=%d, len(передан)=%d",
+                    len(env_token),
+                    len(bot_token),
+                )
+                bot_token = env_token
+            else:
+                # Вычисляем хеш для лога (с переданным токеном)
+                secret_key = hmac.new(
+                    bot_token.encode("utf-8"), b"WebAppData", hashlib.sha256
+                ).digest()
+                calculated = hmac.new(
+                    secret_key, data_check_string.encode("utf-8"), hashlib.sha256
+                ).hexdigest()
+                logger.warning(
+                    "validate_init_data: неверная подпись. hash из initData: %s..., вычисленный: %s... (BOT_TOKEN len=%d)",
+                    (hash_val or "")[:12],
+                    calculated[:12],
+                    len(bot_token),
+                )
+                return None
 
         # Парсим для извлечения user (уже с декодированием)
         parsed = parse_qs(unquote(init_data), keep_blank_values=True)
