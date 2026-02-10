@@ -12,7 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 
 from app.database.models import User, DoctorAssistant, InviteCode
-from app.states.team import TeamStates
+try:
+    from app.states.team import TeamStates
+except ImportError:
+    from aiogram.fsm.state import State, StatesGroup
+    class TeamStates(StatesGroup):
+        enter_invite_code = State()
 from app.utils.permissions import (
     default_permissions,
     normalize_permissions,

@@ -6,7 +6,6 @@ from app.utils.permissions import (
     FEATURE_CALENDAR,
     FEATURE_PATIENTS,
     FEATURE_HISTORY,
-    FEATURE_IMPLANTS,
     FEATURE_SERVICES,
     FEATURE_FINANCE,
     FEATURE_EXPORT,
@@ -35,8 +34,6 @@ def get_main_menu_keyboard(
             builder.button(text="👥 Пациенты")
         if can_access(assistant_permissions, FEATURE_HISTORY):
             builder.button(text="📋 История болезни")
-    if tier >= 1 and can_access(assistant_permissions, FEATURE_IMPLANTS):
-        builder.button(text="🦷 Импланты")
 
     if tier >= 2:
         if can_access(assistant_permissions, FEATURE_FINANCE):
