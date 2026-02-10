@@ -1,32 +1,54 @@
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
 from aiogram.types import ReplyKeyboardMarkup, InlineKeyboardMarkup
 from app.database.models import User
+from app.utils.permissions import (
+    can_access,
+    FEATURE_CALENDAR,
+    FEATURE_PATIENTS,
+    FEATURE_HISTORY,
+    FEATURE_IMPLANTS,
+    FEATURE_SERVICES,
+    FEATURE_FINANCE,
+    FEATURE_EXPORT,
+    FEATURE_SETTINGS,
+)
 
 
-def get_main_menu_keyboard(user: User) -> ReplyKeyboardMarkup:
-    """Главное меню в зависимости от уровня подписки"""
+def get_main_menu_keyboard(
+    user: User,
+    effective_doctor: User,
+    assistant_permissions: dict,
+) -> ReplyKeyboardMarkup:
+    """Главное меню: по подписке врача (effective_doctor) и правам ассистента."""
     builder = ReplyKeyboardBuilder()
-    
-    # Базовые функции (доступны всем)
-    builder.button(text="📅 Календарь")
-    builder.button(text="📋 Расписание")
+    tier = effective_doctor.subscription_tier
+
+    if can_access(assistant_permissions, FEATURE_CALENDAR):
+        builder.button(text="📅 Календарь")
+        builder.button(text="📋 Расписание")
     builder.button(text="👤 Визитка")
-    builder.button(text="💵 Прайс-лист")  # Просмотр для всех, редактирование — Premium
-    
-    # Стандартные функции (tier >= 1)
-    if user.subscription_tier >= 1:
-        builder.button(text="👥 Пациенты")
-        builder.button(text="📋 История болезни")
-    
-    # Премиум функции (tier >= 2)
-    if user.subscription_tier >= 2:
-        builder.button(text="💰 Финансы")
-        builder.button(text="📊 Экспорт")
-    
+    if can_access(assistant_permissions, FEATURE_SERVICES):
+        builder.button(text="💵 Прайс-лист")
+
+    if tier >= 1:
+        if can_access(assistant_permissions, FEATURE_PATIENTS):
+            builder.button(text="👥 Пациенты")
+        if can_access(assistant_permissions, FEATURE_HISTORY):
+            builder.button(text="📋 История болезни")
+    if tier >= 1 and can_access(assistant_permissions, FEATURE_IMPLANTS):
+        builder.button(text="🦷 Импланты")
+
+    if tier >= 2:
+        if can_access(assistant_permissions, FEATURE_FINANCE):
+            builder.button(text="💰 Финансы")
+        if can_access(assistant_permissions, FEATURE_EXPORT):
+            builder.button(text="📊 Экспорт")
+
     builder.button(text="⭐ Подписка")
-    builder.button(text="⚙️ Настройки")
+    if can_access(assistant_permissions, FEATURE_SETTINGS):
+        builder.button(text="⚙️ Настройки")
+    builder.button(text="👥 Моя команда")
     builder.adjust(2)
-    
     return builder.as_markup(resize_keyboard=True)
 
 

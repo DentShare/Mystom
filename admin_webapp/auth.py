@@ -43,7 +43,7 @@ def validate_init_data(init_data: str, bot_token: str) -> Optional[int]:
         )
         return None
     try:
-        # Собираем data_check_string: пары key=value без hash/signature, значения URL-декодируем (как в док. Telegram)
+        # Собираем data_check_string: пары key=value без hash/signature. Значения как в строке (без unquote) — Telegram подписывает сырую строку.
         pairs_raw = []
         hash_val = None
         for part in init_data.split("&"):
@@ -56,7 +56,7 @@ def validate_init_data(init_data: str, bot_token: str) -> Optional[int]:
                 # Часть клиентов присылают signature — в data_check_string не включаем
                 pass
             else:
-                pairs_raw.append((key, unquote(value)))
+                pairs_raw.append((key, value))
         if not hash_val:
             logger.warning("validate_init_data: отсутствует hash в initData")
             return None

@@ -305,17 +305,23 @@ async def process_edit_timezone(callback: CallbackQuery, user: User, state: FSMC
 
 
 @router.callback_query(F.data == "settings_back")
-async def settings_back(callback: CallbackQuery, user: User, state: FSMContext):
+async def settings_back(
+    callback: CallbackQuery,
+    user: User,
+    effective_doctor: User,
+    assistant_permissions: dict,
+    state: FSMContext,
+):
     """Возврат в главное меню из настроек"""
     await state.clear()
     tier_names = {0: "Basic", 1: "Standard", 2: "Premium"}
-    tier_name = tier_names.get(user.subscription_tier, "Basic")
+    tier_name = tier_names.get(effective_doctor.subscription_tier, "Basic")
     text = (
         f"📋 Главное меню\n\n"
         f"👤 {user.full_name}\n"
-        f"🏥 {user.specialization or 'Не указано'}\n"
+        f"🏥 {effective_doctor.specialization or 'Не указано'}\n"
         f"⭐ Уровень подписки: {tier_name}\n\n"
         f"Выберите действие:"
     )
-    await callback.message.answer(text, reply_markup=get_main_menu_keyboard(user))
+    await callback.message.answer(text, reply_markup=get_main_menu_keyboard(user, effective_doctor, assistant_permissions))
     await callback.answer()

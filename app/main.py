@@ -14,7 +14,7 @@ from app.middleware.user import UserMiddleware
 from app.middleware.subscription import SubscriptionMiddleware
 
 # Импорты роутеров
-from app.handlers import start, menu, settings, business_card, calendar, patients, history, implant, finance, services, admin, export, subscription
+from app.handlers import start, menu, settings, business_card, calendar, patients, history, implant, finance, services, admin, export, subscription, team
 from app.services.reminder_service import (
     get_appointments_due_for_reminder,
     format_reminder_message,
@@ -86,6 +86,7 @@ async def main():
     dp.include_router(services.router)
     dp.include_router(export.router)
     dp.include_router(subscription.router)
+    dp.include_router(team.router)
     dp.include_router(admin.router)
 
     @dp.error()

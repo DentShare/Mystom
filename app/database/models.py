@@ -9,7 +9,7 @@ class Base(DeclarativeBase):
 
 
 class User(Base):
-    """Модель врача (пользователя)"""
+    """Модель врача или ассистента (пользователя)"""
     __tablename__ = "users"
     
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -27,14 +27,53 @@ class User(Base):
     timezone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     settings: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    # Роль: owner — владелец (врач), assistant — ассистент привязан к врачу
+    role: Mapped[str] = mapped_column(String(20), default="owner")
+    owner_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     
-    # Relationships
+    # Relationships (owner/assistant)
+    owner: Mapped[Optional["User"]] = relationship("User", remote_side="User.id", back_populates="assistants", foreign_keys=[owner_id])
+    assistants: Mapped[list["User"]] = relationship("User", back_populates="owner", foreign_keys=[owner_id])
+    doctor_assistant_links: Mapped[list["DoctorAssistant"]] = relationship("DoctorAssistant", back_populates="doctor", foreign_keys="DoctorAssistant.doctor_id")
+    assistant_link: Mapped[Optional["DoctorAssistant"]] = relationship("DoctorAssistant", back_populates="assistant_user", foreign_keys="DoctorAssistant.assistant_id", uselist=False)
+    invite_codes: Mapped[list["InviteCode"]] = relationship("InviteCode", back_populates="doctor", cascade="all, delete-orphan")
     clinic_locations: Mapped[list["ClinicLocation"]] = relationship(back_populates="doctor", cascade="all, delete-orphan")
     patients: Mapped[list["Patient"]] = relationship(back_populates="doctor", cascade="all, delete-orphan")
     appointments: Mapped[list["Appointment"]] = relationship(back_populates="doctor", cascade="all, delete-orphan")
     services: Mapped[list["Service"]] = relationship(back_populates="doctor", cascade="all, delete-orphan")
     treatments: Mapped[list["Treatment"]] = relationship(back_populates="doctor", cascade="all, delete-orphan")
     implant_logs: Mapped[list["ImplantLog"]] = relationship(back_populates="doctor", cascade="all, delete-orphan")
+
+
+class DoctorAssistant(Base):
+    """Связь врач — ассистент с настраиваемыми правами.
+    permissions: dict вида {"calendar": "edit", "patients": "view", ...}
+    Уровни: "none" | "view" | "edit"
+    """
+    __tablename__ = "doctor_assistant"
+    
+    id: Mapped[int] = mapped_column(primary_key=True)
+    doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    assistant_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    permissions: Mapped[dict] = mapped_column(JSON, nullable=False)
+    invite_code: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    
+    doctor: Mapped["User"] = relationship("User", back_populates="doctor_assistant_links", foreign_keys=[doctor_id])
+    assistant_user: Mapped["User"] = relationship("User", back_populates="doctor_assistant_links", foreign_keys=[assistant_id])
+
+
+class InviteCode(Base):
+    """Временный код приглашения ассистента (врач создаёт, ассистент вводит)."""
+    __tablename__ = "invite_codes"
+    
+    id: Mapped[int] = mapped_column(primary_key=True)
+    doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    code: Mapped[str] = mapped_column(String(12), unique=True)
+    permissions: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    
+    doctor: Mapped["User"] = relationship("User", back_populates="invite_codes")
 
 
 class ClinicLocation(Base):

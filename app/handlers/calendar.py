@@ -29,16 +29,26 @@ from app.services.service_service import (
 from app.utils.formatters import format_money, treatment_effective_price
 from app.states.patient import PatientStates
 from app.keyboards.main import get_cancel_keyboard, get_main_menu_keyboard
+from app.utils.permissions import can_access, FEATURE_CALENDAR
 from sqlalchemy import select, and_
 
 router = Router(name="calendar")
 
 
 @router.message(F.text == "📋 Расписание")
-async def cmd_schedule_view(message: Message, user: User, db_session: AsyncSession):
+async def cmd_schedule_view(
+    message: Message,
+    user: User,
+    effective_doctor: User,
+    assistant_permissions: dict,
+    db_session: AsyncSession,
+):
     """Расписание — календарь дней с записями"""
+    if not can_access(assistant_permissions, FEATURE_CALENDAR):
+        await message.answer("Нет доступа к календарю.")
+        return
     today = datetime.now()
-    dates = await get_dates_with_appointments(db_session, user.id, today.year, today.month)
+    dates = await get_dates_with_appointments(db_session, effective_doctor.id, today.year, today.month)
     
     month_names = ["январе", "феврале", "марте", "апреле", "мае", "июне",
                    "июле", "августе", "сентябре", "октябре", "ноябре", "декабре"]
@@ -57,27 +67,42 @@ async def cmd_schedule_view(message: Message, user: User, db_session: AsyncSessi
 
 @router.message(Command("today"))
 @router.message(F.text == "📅 Календарь")
-async def cmd_calendar(message: Message, user: User, db_session: AsyncSession):
+async def cmd_calendar(
+    message: Message,
+    user: User,
+    effective_doctor: User,
+    assistant_permissions: dict,
+    db_session: AsyncSession,
+):
     """Показать календарь или расписание на сегодня"""
+    if not can_access(assistant_permissions, FEATURE_CALENDAR):
+        await message.answer("Нет доступа к календарю.")
+        return
     if message.text == "📅 Календарь":
-        # Показываем календарь для выбора даты
         today = datetime.now()
         await message.answer(
             "📅 Выберите дату:",
             reply_markup=get_calendar_keyboard(today.year, today.month)
         )
     else:
-        # Показываем расписание на сегодня
-        appointments = await get_appointments_today(db_session, user.id)
-        show_price = user.subscription_tier >= 1  # Basic — без стоимости
+        appointments = await get_appointments_today(db_session, effective_doctor.id)
+        show_price = effective_doctor.subscription_tier >= 1
         text = await format_appointments_list(appointments, show_price=show_price)
         await message.answer(text)
 
 
 @router.message(Command("schedule"))
-async def cmd_schedule(message: Message, user: User, db_session: AsyncSession):
+async def cmd_schedule(
+    message: Message,
+    user: User,
+    effective_doctor: User,
+    assistant_permissions: dict,
+    db_session: AsyncSession,
+):
     """Показать расписание на выбранную дату"""
-    # Парсим дату из команды (формат: /schedule 2024-01-15)
+    if not can_access(assistant_permissions, FEATURE_CALENDAR):
+        await message.answer("Нет доступа к календарю.")
+        return
     args = message.text.split()
     if len(args) > 1:
         try:
@@ -87,31 +112,36 @@ async def cmd_schedule(message: Message, user: User, db_session: AsyncSession):
             return
     else:
         target_date = date.today()
-    
-    appointments = await get_appointments_by_date(db_session, user.id, target_date)
-    show_price = user.subscription_tier >= 1  # Basic — без стоимости
+    appointments = await get_appointments_by_date(db_session, effective_doctor.id, target_date)
+    show_price = effective_doctor.subscription_tier >= 1
     text = await format_appointments_list(appointments, show_price=show_price)
     await message.answer(text)
 
 
 # Обработчики расписания
 @router.callback_query(F.data.startswith("sched_"))
-async def process_schedule_callback(callback: CallbackQuery, user: User, db_session: AsyncSession):
+async def process_schedule_callback(
+    callback: CallbackQuery,
+    user: User,
+    effective_doctor: User,
+    assistant_permissions: dict,
+    db_session: AsyncSession,
+):
     """Обработка callback расписания"""
     data = callback.data
     
     if data == "sched_back":
         await callback.message.delete()
         tier_names = {0: "Basic", 1: "Standard", 2: "Premium"}
-        tier_name = tier_names.get(user.subscription_tier, "Basic")
+        tier_name = tier_names.get(effective_doctor.subscription_tier, "Basic")
         text = (
             f"📋 Главное меню\n\n"
             f"👤 {user.full_name}\n"
-            f"🏥 {user.specialization or 'Не указано'}\n"
+            f"🏥 {effective_doctor.specialization or 'Не указано'}\n"
             f"⭐ Уровень подписки: {tier_name}\n\n"
             f"Выберите действие:"
         )
-        await callback.message.answer(text, reply_markup=get_main_menu_keyboard(user))
+        await callback.message.answer(text, reply_markup=get_main_menu_keyboard(user, effective_doctor, assistant_permissions))
         await callback.answer()
         return
     
@@ -122,7 +152,7 @@ async def process_schedule_callback(callback: CallbackQuery, user: User, db_sess
     if data.startswith("sched_prev_"):
         parts = data.replace("sched_prev_", "").split("_")
         year, month = int(parts[0]), int(parts[1])
-        dates = await get_dates_with_appointments(db_session, user.id, year, month)
+        dates = await get_dates_with_appointments(db_session, effective_doctor.id, year, month)
         month_names = ["январе", "феврале", "марте", "апреле", "мае", "июне",
                        "июле", "августе", "сентябре", "октябре", "ноябре", "декабре"]
         text = f"📋 Выберите день ({month_names[month-1]} {year}):"
@@ -133,7 +163,7 @@ async def process_schedule_callback(callback: CallbackQuery, user: User, db_sess
     if data.startswith("sched_next_"):
         parts = data.replace("sched_next_", "").split("_")
         year, month = int(parts[0]), int(parts[1])
-        dates = await get_dates_with_appointments(db_session, user.id, year, month)
+        dates = await get_dates_with_appointments(db_session, effective_doctor.id, year, month)
         month_names = ["январе", "феврале", "марте", "апреле", "мае", "июне",
                        "июле", "августе", "сентябре", "октябре", "ноябре", "декабре"]
         text = f"📋 Выберите день ({month_names[month-1]} {year}):"
@@ -146,19 +176,18 @@ async def process_schedule_callback(callback: CallbackQuery, user: User, db_sess
         year, month, day = int(parts[0]), int(parts[1]), int(parts[2])
         target_date = date(year, month, day)
         
-        appointments = await get_appointments_by_date(db_session, user.id, target_date)
-        show_price = user.subscription_tier >= 1  # Basic — без стоимости
+        appointments = await get_appointments_by_date(db_session, effective_doctor.id, target_date)
+        show_price = effective_doctor.subscription_tier >= 1
         text = await format_schedule_with_contacts(appointments, show_price=show_price)
         
         from aiogram.utils.keyboard import InlineKeyboardBuilder
         builder = InlineKeyboardBuilder()
-        # Для каждой записи: Удалить — у всех; Перенести — только Standard и Premium
         for apt in appointments:
             builder.button(text="🗑 Удалить", callback_data=f"appt_cancel_{apt.id}")
-            if user.subscription_tier >= 1:
+            if effective_doctor.subscription_tier >= 1:
                 builder.button(text="📅 Перенести", callback_data=f"appt_reschedule_{apt.id}")
         builder.button(text="← К календарю", callback_data=f"sched_month_{year}_{month}")
-        builder.adjust(2 if user.subscription_tier >= 1 else 1)
+        builder.adjust(2 if effective_doctor.subscription_tier >= 1 else 1)
         await callback.message.edit_text(text, reply_markup=builder.as_markup())
         await callback.answer()
         return
@@ -166,7 +195,7 @@ async def process_schedule_callback(callback: CallbackQuery, user: User, db_sess
     if data.startswith("sched_month_"):
         parts = data.replace("sched_month_", "").split("_")
         year, month = int(parts[0]), int(parts[1])
-        dates = await get_dates_with_appointments(db_session, user.id, year, month)
+        dates = await get_dates_with_appointments(db_session, effective_doctor.id, year, month)
         month_names = ["январе", "феврале", "марте", "апреле", "мае", "июне",
                        "июле", "августе", "сентябре", "октябре", "ноябре", "декабре"]
         text = f"📋 Выберите день ({month_names[month-1]} {year}):"
@@ -179,7 +208,13 @@ async def process_schedule_callback(callback: CallbackQuery, user: User, db_sess
 
 # Обработчики календаря
 @router.callback_query(F.data.startswith("cal_"))
-async def process_calendar_callback(callback: CallbackQuery, user: User, state: FSMContext, db_session: AsyncSession):
+async def process_calendar_callback(
+    callback: CallbackQuery,
+    user: User,
+    effective_doctor: User,
+    state: FSMContext,
+    db_session: AsyncSession,
+):
     """Обработка callback от календаря"""
     data = callback.data
     
@@ -190,17 +225,15 @@ async def process_calendar_callback(callback: CallbackQuery, user: User, state: 
         return
     
     if data == "cal_today":
-        # «Сегодня» — сразу открываем временной график на сегодня
         today = datetime.now()
         selected_date = today.replace(hour=0, minute=0, second=0, microsecond=0)
         await state.update_data(selected_date=selected_date)
 
         data_state = await state.get_data()
         if data_state.get("rescheduling_appointment_id"):
-            # Перенос: показать выбор времени на выбранную дату
             appointment_id = data_state["rescheduling_appointment_id"]
             busy_ranges = await get_busy_ranges_for_date(
-                db_session, user.id, selected_date.date(), exclude_appointment_id=appointment_id
+                db_session, effective_doctor.id, selected_date.date(), exclude_appointment_id=appointment_id
             )
             keyboard = get_time_slots_keyboard(
                 selected_date=selected_date, busy_ranges=busy_ranges
@@ -213,11 +246,11 @@ async def process_calendar_callback(callback: CallbackQuery, user: User, state: 
             await callback.answer()
             return
 
-        locations = await get_clinic_locations(db_session, user.id)
+        locations = await get_clinic_locations(db_session, effective_doctor.id)
         if len(locations) <= 1:
             if len(locations) == 1:
                 await state.update_data(location_id=locations[0].id)
-            if user.subscription_tier >= 1:
+            if effective_doctor.subscription_tier >= 1:
                 builder = InlineKeyboardBuilder()
                 builder.button(text="🔍 Найти в базе", callback_data="appt_find_patient")
                 builder.button(text="➕ Новый пациент", callback_data="appt_new_patient")
@@ -256,10 +289,9 @@ async def process_calendar_callback(callback: CallbackQuery, user: User, state: 
         # Проверяем, переносим ли мы запись
         data_state = await state.get_data()
         if data_state.get("rescheduling_appointment_id"):
-            # Перенос: показать выбор времени на выбранную дату
             appointment_id = data_state["rescheduling_appointment_id"]
             busy_ranges = await get_busy_ranges_for_date(
-                db_session, user.id, selected_date.date(), exclude_appointment_id=appointment_id
+                db_session, effective_doctor.id, selected_date.date(), exclude_appointment_id=appointment_id
             )
             keyboard = get_time_slots_keyboard(
                 selected_date=selected_date, busy_ranges=busy_ranges
@@ -272,13 +304,12 @@ async def process_calendar_callback(callback: CallbackQuery, user: User, state: 
             await callback.answer()
             return
         
-        # Проверяем количество локаций
-        locations = await get_clinic_locations(db_session, user.id)
+        locations = await get_clinic_locations(db_session, effective_doctor.id)
         
         if len(locations) <= 1:
             if len(locations) == 1:
                 await state.update_data(location_id=locations[0].id)
-            if user.subscription_tier >= 1:
+            if effective_doctor.subscription_tier >= 1:
                 builder = InlineKeyboardBuilder()
                 builder.button(text="🔍 Найти в базе", callback_data="appt_find_patient")
                 builder.button(text="➕ Новый пациент", callback_data="appt_new_patient")
@@ -338,6 +369,7 @@ async def process_calendar_callback(callback: CallbackQuery, user: User, state: 
 async def process_location_selection(
     callback: CallbackQuery,
     user: User,
+    effective_doctor: User,
     state: FSMContext
 ):
     """Обработка выбора локации"""
@@ -350,7 +382,7 @@ async def process_location_selection(
     location_id = int(callback.data.replace("loc_", ""))
     await state.update_data(location_id=location_id)
     
-    if user.subscription_tier >= 1:
+    if effective_doctor.subscription_tier >= 1:
         builder = InlineKeyboardBuilder()
         builder.button(text="🔍 Найти в базе", callback_data="appt_find_patient")
         builder.button(text="➕ Новый пациент", callback_data="appt_new_patient")
@@ -372,6 +404,7 @@ async def process_location_selection(
 async def process_time_selection(
     callback: CallbackQuery,
     user: User,
+    effective_doctor: User,
     state: FSMContext,
     db_session: AsyncSession
 ):
@@ -389,13 +422,12 @@ async def process_time_selection(
     hour, minute = map(int, time_str.split(":"))
     appointment_datetime = selected_date.replace(hour=hour, minute=minute)
     
-    # Перенос записи: обновляем дату и время существующей записи
     rescheduling_id = data.get("rescheduling_appointment_id")
     if rescheduling_id:
         stmt = select(Appointment).where(
             and_(
                 Appointment.id == rescheduling_id,
-                Appointment.doctor_id == user.id
+                Appointment.doctor_id == effective_doctor.id
             )
         )
         result = await db_session.execute(stmt)
@@ -412,7 +444,6 @@ async def process_time_selection(
             return
         await state.update_data(rescheduling_appointment_id=None)
     
-    # Standard+: уже выбраны пациент и услуга — для Premium с ценой спрашиваем скидку
     if data.get("service_name") or data.get("service_id"):
         service_id = data.get("service_id")
         service_name = data.get("service_name", "")
@@ -421,7 +452,7 @@ async def process_time_selection(
         patient_id = data.get("patient_id")
         location_id = data.get("location_id")
 
-        if user.subscription_tier >= 2 and service_price and float(service_price) > 0:
+        if effective_doctor.subscription_tier >= 2 and service_price and float(service_price) > 0:
             await state.update_data(appointment_datetime=appointment_datetime)
             await callback.message.edit_text(
                 f"📝 Услуга: **{service_name}** — {format_money(service_price)}\n\n"
@@ -432,7 +463,7 @@ async def process_time_selection(
             return
 
         appointment = Appointment(
-            doctor_id=user.id,
+            doctor_id=effective_doctor.id,
             patient_id=patient_id,
             service_id=service_id,
             location_id=location_id,
@@ -445,13 +476,12 @@ async def process_time_selection(
         await db_session.commit()
         await db_session.refresh(appointment)
 
-        # Автозаполнение истории болезни
         treatment = Treatment(
             patient_id=patient_id,
-            doctor_id=user.id,
+            doctor_id=effective_doctor.id,
             appointment_id=appointment.id,
             service_name=service_name,
-            price=service_price if user.subscription_tier >= 2 else None,
+            price=service_price if effective_doctor.subscription_tier >= 2 else None,
         )
         db_session.add(treatment)
         await db_session.commit()
@@ -480,6 +510,7 @@ async def process_time_selection(
 async def process_appointment_discount(
     message: Message,
     user: User,
+    effective_doctor: User,
     state: FSMContext,
     db_session: AsyncSession
 ):
@@ -527,7 +558,7 @@ async def process_appointment_discount(
         return
 
     appointment = Appointment(
-        doctor_id=user.id,
+        doctor_id=effective_doctor.id,
         patient_id=patient_id,
         service_id=service_id,
         location_id=location_id,
@@ -542,7 +573,7 @@ async def process_appointment_discount(
 
     treatment = Treatment(
         patient_id=patient_id,
-        doctor_id=user.id,
+        doctor_id=effective_doctor.id,
         appointment_id=appointment.id,
         service_name=service_name,
         price=service_price,
@@ -568,6 +599,7 @@ async def process_appointment_discount(
 async def process_patient_name_basic(
     message: Message,
     user: User,
+    effective_doctor: User,
     state: FSMContext,
     db_session: AsyncSession
 ):
@@ -577,9 +609,8 @@ async def process_patient_name_basic(
     appointment_datetime = data.get("appointment_datetime")
     location_id = data.get("location_id")
     
-    # Создаем запись (Basic: фиксированно 30 мин)
     appointment = Appointment(
-        doctor_id=user.id,
+        doctor_id=effective_doctor.id,
         patient_id=None,  # Для Basic
         location_id=location_id,
         date_time=appointment_datetime,
@@ -634,6 +665,7 @@ async def new_patient_for_appointment(callback: CallbackQuery, state: FSMContext
 async def process_patient_search_for_appointment(
     message: Message,
     user: User,
+    effective_doctor: User,
     state: FSMContext,
     db_session: AsyncSession
 ):
@@ -649,7 +681,7 @@ async def process_patient_search_for_appointment(
         await message.answer("❌ Введите ФИО или телефон для поиска:")
         return
     
-    patients = await search_patients(db_session, user.id, query)
+    patients = await search_patients(db_session, effective_doctor.id, query)
     
     if not patients:
         await message.answer(
@@ -684,6 +716,7 @@ async def process_patient_search_for_appointment(
 async def select_patient_for_appointment(
     callback: CallbackQuery,
     user: User,
+    effective_doctor: User,
     state: FSMContext,
     db_session: AsyncSession
 ):
@@ -691,18 +724,18 @@ async def select_patient_for_appointment(
     patient_id = int(callback.data.replace("appt_select_patient_", ""))
     await state.update_data(patient_id=patient_id)
     await callback.message.delete()
-    await _continue_appointment_creation(callback.message, user, state, db_session)
+    await _continue_appointment_creation(callback.message, effective_doctor, state, db_session)
     await callback.answer()
 
 
 async def _continue_appointment_creation(
     message: Message,
-    user: User,
+    effective_doctor: User,
     state: FSMContext,
     db_session: AsyncSession
 ):
     """Продолжение создания записи — выбор услуги по категориям"""
-    await ensure_default_services(db_session, user.id)
+    await ensure_default_services(db_session, effective_doctor.id)
     categories = await get_categories()
 
     builder = InlineKeyboardBuilder()
@@ -722,6 +755,7 @@ async def _continue_appointment_creation(
 async def process_service_category(
     callback: CallbackQuery,
     user: User,
+    effective_doctor: User,
     state: FSMContext,
     db_session: AsyncSession
 ):
@@ -729,7 +763,7 @@ async def process_service_category(
     category = callback.data.replace("appt_cat_", "")
     await state.update_data(service_category=category)
 
-    services = await get_services_by_category(db_session, user.id, category)
+    services = await get_services_by_category(db_session, effective_doctor.id, category)
     cat_name, cat_emoji = CATEGORIES.get(category, ("", ""))
 
     builder = InlineKeyboardBuilder()
@@ -765,11 +799,12 @@ async def process_service_other(
 async def process_service_back(
     callback: CallbackQuery,
     user: User,
+    effective_doctor: User,
     state: FSMContext,
     db_session: AsyncSession
 ):
     """Назад к категориям"""
-    await ensure_default_services(db_session, user.id)
+    await ensure_default_services(db_session, effective_doctor.id)
     categories = await get_categories()
 
     builder = InlineKeyboardBuilder()
@@ -790,12 +825,13 @@ async def process_service_back(
 async def process_service_selection(
     callback: CallbackQuery,
     user: User,
+    effective_doctor: User,
     state: FSMContext,
     db_session: AsyncSession
 ):
     """Выбор услуги — переходим к выбору времени (слоты блокируются по длительности)"""
     service_id = int(callback.data.replace("appt_svc_", ""))
-    service = await get_service_by_id(db_session, service_id, user.id)
+    service = await get_service_by_id(db_session, service_id, effective_doctor.id)
     if not service:
         await callback.answer("❌ Услуга не найдена", show_alert=True)
         return
@@ -814,7 +850,7 @@ async def process_service_selection(
         patient_id=patient_id,
     )
 
-    busy_ranges = await get_busy_ranges_for_date(db_session, user.id, selected_date.date())
+    busy_ranges = await get_busy_ranges_for_date(db_session, effective_doctor.id, selected_date.date())
     keyboard = get_time_slots_keyboard(
         selected_date=selected_date,
         duration_minutes=duration_minutes,
@@ -833,6 +869,7 @@ async def process_service_selection(
 async def process_service_description(
     message: Message,
     user: User,
+    effective_doctor: User,
     state: FSMContext,
     db_session: AsyncSession
 ):
@@ -855,7 +892,7 @@ async def process_service_description(
         patient_id=patient_id,
     )
 
-    busy_ranges = await get_busy_ranges_for_date(db_session, user.id, selected_date.date())
+    busy_ranges = await get_busy_ranges_for_date(db_session, effective_doctor.id, selected_date.date())
     keyboard = get_time_slots_keyboard(
         selected_date=selected_date,
         duration_minutes=30,
@@ -874,6 +911,7 @@ async def process_service_description(
 async def cancel_existing_appointment(
     callback: CallbackQuery,
     user: User,
+    effective_doctor: User,
     db_session: AsyncSession
 ):
     """Удаление (отмена) записи — возврат к расписанию на день"""
@@ -883,7 +921,7 @@ async def cancel_existing_appointment(
     stmt = select(Appointment).where(
         and_(
             Appointment.id == appointment_id,
-            Appointment.doctor_id == user.id
+            Appointment.doctor_id == effective_doctor.id
         )
     )
     result = await db_session.execute(stmt)
@@ -897,9 +935,8 @@ async def cancel_existing_appointment(
     appointment.status = "cancelled"
     await db_session.commit()
     
-    # Показываем обновлённое расписание на этот день
-    appointments = await get_appointments_by_date(db_session, user.id, target_date)
-    show_price = user.subscription_tier >= 1
+    appointments = await get_appointments_by_date(db_session, effective_doctor.id, target_date)
+    show_price = effective_doctor.subscription_tier >= 1
     text = await format_schedule_with_contacts(appointments, show_price=show_price)
     if not appointments:
         text = f"📋 **Расписание на {target_date.strftime('%d.%m.%Y')}**\n\n✅ Запись отменена. На этот день записей не осталось."
@@ -909,11 +946,11 @@ async def cancel_existing_appointment(
     builder = InlineKeyboardBuilder()
     for apt in appointments:
         builder.button(text="🗑 Удалить", callback_data=f"appt_cancel_{apt.id}")
-        if user.subscription_tier >= 1:
+        if effective_doctor.subscription_tier >= 1:
             builder.button(text="📅 Перенести", callback_data=f"appt_reschedule_{apt.id}")
     y, m, d = target_date.year, target_date.month, target_date.day
     builder.button(text="← К календарю", callback_data=f"sched_month_{y}_{m}")
-    builder.adjust(2 if user.subscription_tier >= 1 else 1)
+    builder.adjust(2 if effective_doctor.subscription_tier >= 1 else 1)
     
     await callback.message.edit_text(text, reply_markup=builder.as_markup())
     await callback.answer("✅ Запись удалена")
@@ -923,6 +960,7 @@ async def cancel_existing_appointment(
 async def reschedule_appointment(
     callback: CallbackQuery,
     user: User,
+    effective_doctor: User,
     state: FSMContext,
     db_session: AsyncSession
 ):
@@ -933,7 +971,7 @@ async def reschedule_appointment(
     stmt = select(Appointment).where(
         and_(
             Appointment.id == appointment_id,
-            Appointment.doctor_id == user.id
+            Appointment.doctor_id == effective_doctor.id
         )
     )
     result = await db_session.execute(stmt)

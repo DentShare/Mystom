@@ -4,12 +4,13 @@ from aiogram.types import TelegramObject, User as TelegramUser
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from app.database.models import User
+from app.database.models import User, DoctorAssistant
 from app.database.session import async_session_maker
+from app.utils.permissions import full_permissions, normalize_permissions
 
 
 class UserMiddleware(BaseMiddleware):
-    """Middleware для получения пользователя из БД и добавления в data"""
+    """Middleware: пользователь из БД, effective_doctor и права ассистента."""
     
     async def __call__(
         self,
@@ -17,9 +18,7 @@ class UserMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: Dict[str, Any]
     ) -> Any:
-        # Получаем telegram_user из события
         telegram_user: TelegramUser | None = None
-        
         if hasattr(event, "from_user") and event.from_user:
             telegram_user = event.from_user
         elif hasattr(event, "message") and event.message and event.message.from_user:
@@ -30,13 +29,11 @@ class UserMiddleware(BaseMiddleware):
         if not telegram_user:
             return await handler(event, data)
         
-        # Получаем пользователя из БД (сессия должна быть открыта во время handler!)
         async with async_session_maker() as session:
             stmt = select(User).where(User.telegram_id == telegram_user.id)
             result = await session.execute(stmt)
             user = result.scalar_one_or_none()
             
-            # Если пользователя нет, создаем нового (базовый уровень)
             if not user:
                 full_name = (
                     f"{telegram_user.first_name or ''} {telegram_user.last_name or ''}".strip()
@@ -45,15 +42,34 @@ class UserMiddleware(BaseMiddleware):
                 user = User(
                     telegram_id=telegram_user.id,
                     full_name=full_name,
-                    subscription_tier=0  # Basic по умолчанию
+                    subscription_tier=0,
+                    role="owner",
                 )
                 session.add(user)
                 await session.commit()
                 await session.refresh(user)
             
+            effective_doctor = user
+            assistant_permissions = full_permissions()
+            
+            if getattr(user, "role", "owner") == "assistant" and getattr(user, "owner_id", None):
+                stmt_owner = select(User).where(User.id == user.owner_id)
+                res_owner = await session.execute(stmt_owner)
+                owner = res_owner.scalar_one_or_none()
+                if owner:
+                    effective_doctor = owner
+                    link_stmt = select(DoctorAssistant).where(
+                        DoctorAssistant.doctor_id == owner.id,
+                        DoctorAssistant.assistant_id == user.id,
+                    )
+                    link_res = await session.execute(link_stmt)
+                    link = link_res.scalar_one_or_none()
+                    if link and link.permissions:
+                        assistant_permissions = normalize_permissions(link.permissions)
+            
             data["user"] = user
             data["db_session"] = session
-            
-            # Handler выполняется ВНУТРИ блока — сессия открыта, commit сохранит данные
+            data["effective_doctor"] = effective_doctor
+            data["assistant_permissions"] = assistant_permissions
             return await handler(event, data)
 
