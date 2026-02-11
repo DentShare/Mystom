@@ -4,35 +4,77 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, Location
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from app.database.models import User
 from app.states.registration import RegistrationStates
+from app.states.team import TeamStates
 from app.services.timezone import get_common_timezones
 
 router = Router(name="start")
 
 
+def _is_registered(user: User) -> bool:
+    """Уже прошёл регистрацию: врач (ФИО + специализация) или ассистент (ФИО + привязка)."""
+    if not user.full_name or user.full_name == "Не указано":
+        return False
+    if getattr(user, "role", "owner") == "assistant" and getattr(user, "owner_id", None):
+        return True
+    return bool(user.specialization)
+
+
 @router.message(Command("start"))
 async def cmd_start(message: Message, user: User, state: FSMContext):
-    """Обработчик команды /start"""
-    # Проверяем, заполнена ли регистрация
-    if user.full_name and user.full_name != "Не указано" and user.specialization:
-        # Пользователь уже зарегистрирован
-        await message.answer(
-            f"👋 Добро пожаловать, {user.full_name}!\n\n"
-            f"Ваш уровень подписки: {_get_tier_name(user.subscription_tier)}\n\n"
-            f"Используйте /menu для доступа к главному меню."
-        )
+    """Обработчик команды /start: выбор роли или приветствие."""
+    if _is_registered(user):
+        tier_name = _get_tier_name(user.subscription_tier)
+        if getattr(user, "role", "owner") == "assistant":
+            await message.answer(
+                f"👋 Добро пожаловать, {user.full_name}!\n\n"
+                f"Используйте /menu для доступа к меню."
+            )
+        else:
+            await message.answer(
+                f"👋 Добро пожаловать, {user.full_name}!\n\n"
+                f"Ваш уровень подписки: {tier_name}\n\n"
+                f"Используйте /menu для доступа к главному меню."
+            )
         await state.clear()
         return
-    
-    # Начинаем регистрацию
+
+    # Выбор роли: ассистент или стоматолог
+    builder = InlineKeyboardBuilder()
+    builder.button(text="👨‍⚕️ Я стоматолог", callback_data="reg_role_dentist")
+    builder.button(text="👥 Я ассистент", callback_data="reg_role_assistant")
+    builder.adjust(1)
+    await state.set_state(RegistrationStates.choose_role)
     await message.answer(
         "👋 Добро пожаловать в MiniStom!\n\n"
-        "Я помогу вам организовать работу с пациентами.\n\n"
-        "Давайте начнем регистрацию. Пожалуйста, введите ваше ФИО:"
+        "Кто вы?",
+        reply_markup=builder.as_markup(),
     )
+
+
+@router.callback_query(StateFilter(RegistrationStates.choose_role), F.data == "reg_role_dentist")
+async def reg_role_dentist(callback: CallbackQuery, user: User, state: FSMContext):
+    """Выбрана роль стоматолог — полная регистрация."""
     await state.set_state(RegistrationStates.enter_full_name)
+    await callback.message.edit_text(
+        "👨‍⚕️ Регистрация стоматолога.\n\nПожалуйста, введите ваше ФИО:"
+    )
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(RegistrationStates.choose_role), F.data == "reg_role_assistant")
+async def reg_role_assistant(callback: CallbackQuery, user: User, state: FSMContext):
+    """Выбрана роль ассистент — запрос кода приглашения."""
+    await state.set_state(TeamStates.enter_invite_code)
+    await callback.message.edit_text(
+        "👥 Регистрация ассистента.\n\n"
+        "Введите код приглашения от врача (6 символов). "
+        "Код вам должен передать стоматолог из раздела «Моя команда»."
+    )
+    await callback.answer()
 
 
 @router.message(StateFilter(RegistrationStates.enter_full_name))
@@ -152,6 +194,38 @@ async def process_photo_skip(message: Message, user: User, state: FSMContext):
         await _ask_timezone(message, state)
     else:
         await message.answer("❌ Пожалуйста, отправьте фото или /skip")
+
+
+# ----- Регистрация ассистента (после привязки по коду) -----
+
+@router.message(StateFilter(RegistrationStates.assistant_enter_name))
+async def assistant_enter_name(message: Message, user: User, state: FSMContext, db_session: AsyncSession):
+    """ФИО ассистента после привязки к врачу."""
+    full_name = (message.text or "").strip()
+    if len(full_name) < 3:
+        await message.answer("❌ ФИО должно содержать минимум 3 символа. Введите ещё раз:")
+        return
+    user.full_name = full_name
+    await db_session.commit()
+    await state.set_state(RegistrationStates.assistant_enter_phone)
+    await message.answer("✅ ФИО сохранено!\n\nВведите ваш номер телефона (или /skip для пропуска):")
+
+
+@router.message(StateFilter(RegistrationStates.assistant_enter_phone))
+async def assistant_enter_phone(message: Message, user: User, state: FSMContext, db_session: AsyncSession):
+    """Телефон ассистента — завершение регистрации."""
+    if message.text and message.text.strip().lower() == "/skip":
+        pass
+    else:
+        phone = (message.text or "").strip()
+        if phone:
+            user.phone = phone
+            await db_session.commit()
+    await state.clear()
+    await message.answer(
+        "✅ Регистрация ассистента завершена!\n\n"
+        "Адрес и локация клиники скопированы от врача. Используйте /menu для доступа к меню."
+    )
 
 
 async def _ask_timezone(message: Message, state: FSMContext):

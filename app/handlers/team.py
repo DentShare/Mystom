@@ -286,14 +286,29 @@ async def team_save_permissions(
     effective_doctor: User,
     db_session: AsyncSession,
 ):
-    """Сохранить права и вернуться к ассистенту."""
+    """Сохранить права и вернуться к ассистенту; отправить ассистенту уведомление."""
     if not _is_owner(user) or user.id != effective_doctor.id:
         await callback.answer()
         return
     assistant_id = int(callback.data.split("_")[-1])
     await db_session.commit()
+    # Уведомить ассистента: новые кнопки настроены, отправить /menu
+    stmt = select(DoctorAssistant).where(
+        DoctorAssistant.doctor_id == user.id,
+        DoctorAssistant.assistant_id == assistant_id,
+    )
+    res = await db_session.execute(stmt)
+    link = res.scalar_one_or_none()
+    if link:
+        await db_session.refresh(link.assistant_user)
+        try:
+            await callback.bot.send_message(
+                link.assistant_user.telegram_id,
+                "✅ Новые кнопки настроены. Отправьте /menu, чтобы обновить доступ.",
+            )
+        except Exception as e:
+            log.warning("Не удалось отправить уведомление ассистенту %s: %s", assistant_id, e)
     await callback.answer("Сохранено")
-    # Redirect to team_asst_ menu
     callback.data = f"team_asst_{assistant_id}"
     await team_asst_menu(callback, user, effective_doctor, db_session)
 
@@ -390,6 +405,8 @@ async def _do_bind(
     state: FSMContext,
 ):
     from app.database.session import async_session_maker
+    from app.states.registration import RegistrationStates
+
     await state.clear()
     async with async_session_maker() as db_session:
         stmt = select(InviteCode).where(InviteCode.code == code)
@@ -406,11 +423,26 @@ async def _do_bind(
             permissions=perms,
         )
         db_session.add(link)
-        user.role = "assistant"
-        user.owner_id = doctor_id
+        stmt_user = select(User).where(User.id == user.id)
+        res_user = await db_session.execute(stmt_user)
+        user_db = res_user.scalar_one_or_none()
+        if user_db:
+            user_db.role = "assistant"
+            user_db.owner_id = doctor_id
         await db_session.delete(invite)
         await db_session.commit()
+        # Копируем адрес и локацию клиники от врача к ассистенту
+        stmt_doctor = select(User).where(User.id == doctor_id)
+        res_doctor = await db_session.execute(stmt_doctor)
+        doctor = res_doctor.scalar_one_or_none()
+        if doctor and user_db:
+            user_db.address = doctor.address
+            user_db.location_lat = doctor.location_lat
+            user_db.location_lon = doctor.location_lon
+            user_db.timezone = getattr(doctor, "timezone", None) or user_db.timezone
+            await db_session.commit()
+    await state.set_state(RegistrationStates.assistant_enter_name)
     await message.answer(
-        "Вы успешно привязаны к врачу. Теперь в меню доступны разделы в соответствии с выданными правами. "
-        "Все данные синхронизированы с аккаунтом врача."
+        "Вы привязаны к врачу. Адрес и локация клиники взяты из его профиля.\n\n"
+        "Введите ваше ФИО:"
     )
