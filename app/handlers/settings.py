@@ -3,9 +3,11 @@ from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery, Location
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import User
 from app.keyboards.main import get_main_menu_keyboard, get_settings_keyboard
+from app.services.user_service import delete_user_from_db
 from app.states.settings import SettingsStates
 from app.services.timezone import get_common_timezones
 from app.services.reminder_service import get_reminder_minutes
@@ -44,6 +46,7 @@ def _get_settings_inline_keyboard(user: User) -> InlineKeyboardBuilder:
     builder.button(text="🌍 Часовой пояс", callback_data="edit_timezone")
     if user.subscription_tier >= 1:
         builder.button(text="⏰ Напоминание до записи", callback_data="edit_reminder")
+    builder.button(text="🗑 Удалить мой аккаунт", callback_data="settings_delete_account")
     builder.button(text="⬅️ Назад в меню", callback_data="settings_back")
     builder.adjust(2)
     return builder
@@ -324,4 +327,39 @@ async def settings_back(
         f"Выберите действие:"
     )
     await callback.message.answer(text, reply_markup=get_main_menu_keyboard(user, effective_doctor, assistant_permissions))
+    await callback.answer()
+
+
+@router.callback_query(F.data == "settings_delete_account")
+async def settings_delete_account_confirm(callback: CallbackQuery, user: User):
+    """Подтверждение удаления аккаунта."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Да, удалить аккаунт", callback_data="settings_delete_confirm")
+    builder.button(text="❌ Отмена", callback_data="settings_back")
+    builder.adjust(1)
+    await callback.message.edit_text(
+        "🗑 **Удалить аккаунт?**\n\n"
+        "Будут безвозвратно удалены все ваши данные: пациенты, записи, финансы, настройки. "
+        "После удаления вы сможете снова нажать /start и зарегистрироваться заново.\n\n"
+        "Вы уверены?",
+        reply_markup=builder.as_markup(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "settings_delete_confirm")
+async def settings_delete_confirm_do(
+    callback: CallbackQuery,
+    user: User,
+    db_session: AsyncSession,
+):
+    """Удалить аккаунт текущего пользователя."""
+    ok = await delete_user_from_db(db_session, user)
+    if ok:
+        await callback.message.edit_text(
+            "✅ Аккаунт удалён.\n\n"
+            "Нажмите /start для повторной регистрации."
+        )
+    else:
+        await callback.message.edit_text("❌ Не удалось удалить аккаунт. Обратитесь к администратору.")
     await callback.answer()

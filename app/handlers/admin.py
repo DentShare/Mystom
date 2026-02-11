@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from app.config import Config
 from app.database.models import User
+from app.services.user_service import delete_user_from_db
 
 import logging
 router = Router(name="admin")
@@ -41,6 +42,7 @@ async def cmd_admin(message: Message):
         "Ваш ID: {} (должен быть в ADMIN_IDS)\n\n"
         "Команды:\n"
         "• /admin_list_users — список пользователей\n"
+        "• /admin_delete_user telegram_id — удалить пользователя (сможет заново /start)\n"
         "• /admin_set_tier telegram_id 0|1|2 — уровень без срока\n"
         "• /admin_set_subscription telegram_id tier дни — уровень и срок\n"
         "• /admin_send telegram_id текст — личное сообщение пользователю\n"
@@ -154,6 +156,53 @@ async def cmd_set_subscription(message: Message, db_session: AsyncSession):
         )
     except ValueError:
         await message.answer("❌ Неверный формат. Используйте: /admin_set_subscription <telegram_id> <tier> <days>")
+
+
+@router.message(Command("admin_delete_user", "admindeleteuser"))
+async def cmd_delete_user(message: Message, db_session: AsyncSession):
+    """Удалить пользователя по telegram_id. Он сможет заново нажать /start и пройти регистрацию."""
+    if message.from_user and message.from_user.id not in Config.ADMIN_IDS:
+        await message.answer("❌ Доступ запрещен")
+        return
+
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer(
+            "Использование: /admin_delete_user <telegram_id>\n"
+            "Пример: /admin_delete_user 123456789\n"
+            "Пользователь будет удалён из БД (все его данные: пациенты, записи и т.д.). "
+            "После этого он может снова нажать /start и зарегистрироваться.",
+            parse_mode=None,
+        )
+        return
+
+    try:
+        telegram_id = int(args[1])
+    except ValueError:
+        await message.answer("❌ telegram_id должен быть числом.")
+        return
+
+    if telegram_id in Config.ADMIN_IDS:
+        await message.answer("❌ Нельзя удалить администратора (его ID в ADMIN_IDS).", parse_mode=None)
+        return
+
+    stmt = select(User).where(User.telegram_id == telegram_id)
+    result = await db_session.execute(stmt)
+    user = result.scalar_one_or_none()
+    if not user:
+        await message.answer(f"❌ Пользователь с ID {telegram_id} не найден.")
+        return
+
+    name = (user.full_name or "").strip() or "—"
+    ok = await delete_user_from_db(db_session, user)
+    if ok:
+        await message.answer(
+            f"✅ Пользователь {name} (ID: {telegram_id}) удалён.\n"
+            "Он может снова нажать /start в боте и пройти регистрацию.",
+            parse_mode=None,
+        )
+    else:
+        await message.answer("❌ Не удалось удалить пользователя.")
 
 
 @router.message(Command("admin_list_users", "adminlistusers"))
