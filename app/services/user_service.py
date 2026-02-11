@@ -28,6 +28,6 @@ async def delete_user_from_db(session: AsyncSession, user: User) -> bool:
     await session.execute(delete(DoctorAssistant).where(DoctorAssistant.doctor_id == user_id))
     await session.execute(delete(DoctorAssistant).where(DoctorAssistant.assistant_id == user_id))
 
-    session.delete(user)
+    await session.delete(user)
     await session.commit()
     return True
