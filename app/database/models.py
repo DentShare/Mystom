@@ -30,6 +30,8 @@ class User(Base):
     # Роль: owner — владелец (врач), assistant — ассистент привязан к врачу
     role: Mapped[str] = mapped_column(String(20), default="owner")
     owner_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    # Регистрация пройдена (выбор роли + заполнение профиля). False = показать выбор роли при /start
+    registration_completed: Mapped[bool] = mapped_column(default=False, nullable=False)
     
     # Relationships (owner/assistant)
     owner: Mapped[Optional["User"]] = relationship("User", remote_side="User.id", back_populates="assistants", foreign_keys=[owner_id])

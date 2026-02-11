@@ -15,12 +15,8 @@ router = Router(name="start")
 
 
 def _is_registered(user: User) -> bool:
-    """Уже прошёл регистрацию: врач (ФИО + специализация) или ассистент (ФИО + привязка)."""
-    if not user.full_name or user.full_name == "Не указано":
-        return False
-    if getattr(user, "role", "owner") == "assistant" and getattr(user, "owner_id", None):
-        return True
-    return bool(user.specialization)
+    """Прошёл полную регистрацию (выбор роли + заполнение). Без этого при /start показывается выбор роли."""
+    return bool(getattr(user, "registration_completed", False))
 
 
 @router.message(Command("start"))
@@ -220,7 +216,8 @@ async def assistant_enter_phone(message: Message, user: User, state: FSMContext,
         phone = (message.text or "").strip()
         if phone:
             user.phone = phone
-            await db_session.commit()
+    user.registration_completed = True
+    await db_session.commit()
     await state.clear()
     await message.answer(
         "✅ Регистрация ассистента завершена!\n\n"
@@ -248,9 +245,10 @@ async def _ask_timezone(message: Message, state: FSMContext):
 
 @router.callback_query(StateFilter(RegistrationStates.enter_timezone), F.data.startswith("tz_"))
 async def process_timezone(callback: CallbackQuery, user: User, state: FSMContext, db_session: AsyncSession):
-    """Обработка выбора часового пояса"""
+    """Обработка выбора часового пояса — завершение регистрации стоматолога"""
     timezone_name = callback.data.replace("tz_", "")
     user.timezone = timezone_name
+    user.registration_completed = True
     await db_session.commit()
     
     await callback.message.edit_text(
