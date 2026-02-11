@@ -148,16 +148,20 @@ async def team_asst_menu(
         await callback.answer("Доступ запрещён.", show_alert=True)
         return
     assistant_id = int(callback.data.split("_")[-1])
-    stmt = select(DoctorAssistant).where(
-        DoctorAssistant.doctor_id == user.id,
-        DoctorAssistant.assistant_id == assistant_id,
+    stmt = (
+        select(DoctorAssistant)
+        .where(
+            DoctorAssistant.doctor_id == user.id,
+            DoctorAssistant.assistant_id == assistant_id,
+        )
+        .options(selectinload(DoctorAssistant.assistant_user))
     )
     res = await db_session.execute(stmt)
     link = res.scalar_one_or_none()
     if not link:
         await callback.answer("Ассистент не найден.", show_alert=True)
         return
-    await db_session.refresh(link.assistant_user)
+    asst = link.assistant_user
     from aiogram.utils.keyboard import InlineKeyboardBuilder
     builder = InlineKeyboardBuilder()
     builder.button(text="✏️ Изменить права", callback_data=f"team_edit_{assistant_id}")
@@ -167,7 +171,7 @@ async def team_asst_menu(
     perms = link.permissions or {}
     lines = [f"{FEATURE_LABELS.get(k, k)}: {perms.get(k, LEVEL_NONE)}" for k in ALL_FEATURES]
     await callback.message.edit_text(
-        f"Ассистент: **{link.assistant_user.full_name}**\n\nПрава:\n" + "\n".join(lines),
+        f"Ассистент: **{asst.full_name}**\n\nПрава:\n" + "\n".join(lines),
         reply_markup=builder.as_markup(),
     )
     await callback.answer()
@@ -179,18 +183,23 @@ async def team_back(callback: CallbackQuery, user: User, effective_doctor: User,
     if not _is_owner(user) or user.id != effective_doctor.id:
         await callback.answer()
         return
-    stmt = select(DoctorAssistant).where(DoctorAssistant.doctor_id == user.id)
+    stmt = (
+        select(DoctorAssistant)
+        .where(DoctorAssistant.doctor_id == user.id)
+        .options(selectinload(DoctorAssistant.assistant_user))
+    )
     result = await db_session.execute(stmt)
     links = list(result.scalars().all())
     text = "👥 **Моя команда**\n\nВаши ассистенты:\n" if links else "👥 **Моя команда**\n\nПока нет привязанных ассистентов."
     for link in links:
-        await db_session.refresh(link.assistant_user)
-        text += f"\n• {link.assistant_user.full_name}"
+        asst = link.assistant_user
+        text += f"\n• {asst.full_name}"
     from aiogram.utils.keyboard import InlineKeyboardBuilder
     builder = InlineKeyboardBuilder()
     builder.button(text="➕ Пригласить ассистента", callback_data="team_invite")
     for link in links:
-        builder.button(text=f"⚙️ {link.assistant_user.full_name}", callback_data=f"team_asst_{link.assistant_id}")
+        asst = link.assistant_user
+        builder.button(text=f"⚙️ {asst.full_name}", callback_data=f"team_asst_{link.assistant_id}")
     builder.adjust(1)
     await callback.message.edit_text(text, reply_markup=builder.as_markup())
     await callback.answer()
@@ -303,17 +312,21 @@ async def team_save_permissions(
     assistant_id = int(callback.data.split("_")[-1])
     await db_session.commit()
     # Уведомить ассистента: новые кнопки настроены, отправить /menu
-    stmt = select(DoctorAssistant).where(
-        DoctorAssistant.doctor_id == user.id,
-        DoctorAssistant.assistant_id == assistant_id,
+    stmt = (
+        select(DoctorAssistant)
+        .where(
+            DoctorAssistant.doctor_id == user.id,
+            DoctorAssistant.assistant_id == assistant_id,
+        )
+        .options(selectinload(DoctorAssistant.assistant_user))
     )
     res = await db_session.execute(stmt)
     link = res.scalar_one_or_none()
     if link:
-        await db_session.refresh(link.assistant_user)
+        asst = link.assistant_user
         try:
             await callback.bot.send_message(
-                link.assistant_user.telegram_id,
+                asst.telegram_id,
                 "✅ Новые кнопки настроены. Отправьте /menu, чтобы обновить доступ.",
             )
         except Exception as e:
@@ -353,9 +366,13 @@ async def team_unbind(
         await callback.answer("Доступ запрещён.", show_alert=True)
         return
     assistant_id = int(callback.data.split("_")[-1])
-    stmt = select(DoctorAssistant).where(
-        DoctorAssistant.doctor_id == user.id,
-        DoctorAssistant.assistant_id == assistant_id,
+    stmt = (
+        select(DoctorAssistant)
+        .where(
+            DoctorAssistant.doctor_id == user.id,
+            DoctorAssistant.assistant_id == assistant_id,
+        )
+        .options(selectinload(DoctorAssistant.assistant_user))
     )
     res = await db_session.execute(stmt)
     link = res.scalar_one_or_none()
