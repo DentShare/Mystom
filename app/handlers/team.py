@@ -10,6 +10,7 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
+from sqlalchemy.orm import selectinload
 
 from app.database.models import User, DoctorAssistant, InviteCode
 try:
@@ -70,33 +71,42 @@ async def cmd_team(
         await message.answer("Раздел «Моя команда» доступен только владельцу аккаунта.")
         return
 
-    # Владелец: список ассистентов
-    stmt = select(DoctorAssistant).where(DoctorAssistant.doctor_id == user.id)
-    result = await db_session.execute(stmt)
-    links = list(result.scalars().all())
-    if not links:
-        text = "👥 **Моя команда**\n\nПока нет привязанных ассистентов. Создайте код приглашения и передайте его ассистенту."
-    else:
-        text = "👥 **Моя команда**\n\nВаши ассистенты:\n"
-        for link in links:
-            await db_session.refresh(link.assistant_user)
-            text += f"\n• {link.assistant_user.full_name} (ID: {link.assistant_user.telegram_id})"
-            perms = link.permissions or {}
-            view_edit = [k for k in ALL_FEATURES if perms.get(k) == LEVEL_EDIT]
-            view_only = [k for k in ALL_FEATURES if perms.get(k) == LEVEL_VIEW]
-            if view_edit or view_only:
-                text += f"\n  Редактирование: {', '.join(view_edit) or '—'}; просмотр: {', '.join(view_only) or '—'}"
-
-    from aiogram.utils.keyboard import InlineKeyboardBuilder
-    builder = InlineKeyboardBuilder()
-    builder.button(text="➕ Пригласить ассистента", callback_data="team_invite")
-    for link in links:
-        builder.button(
-            text=f"⚙️ {link.assistant_user.full_name}",
-            callback_data=f"team_asst_{link.assistant_id}",
+    try:
+        # Владелец: список ассистентов (загружаем assistant_user одним запросом, чтобы не было lazy load в async)
+        stmt = (
+            select(DoctorAssistant)
+            .where(DoctorAssistant.doctor_id == user.id)
+            .options(selectinload(DoctorAssistant.assistant_user))
         )
-    builder.adjust(1)
-    await message.answer(text, reply_markup=builder.as_markup())
+        result = await db_session.execute(stmt)
+        links = list(result.scalars().all())
+        if not links:
+            text = "👥 **Моя команда**\n\nПока нет привязанных ассистентов. Создайте код приглашения и передайте его ассистенту."
+        else:
+            text = "👥 **Моя команда**\n\nВаши ассистенты:\n"
+            for link in links:
+                asst = link.assistant_user
+                text += f"\n• {asst.full_name} (ID: {asst.telegram_id})"
+                perms = link.permissions or {}
+                view_edit = [k for k in ALL_FEATURES if perms.get(k) == LEVEL_EDIT]
+                view_only = [k for k in ALL_FEATURES if perms.get(k) == LEVEL_VIEW]
+                if view_edit or view_only:
+                    text += f"\n  Редактирование: {', '.join(view_edit) or '—'}; просмотр: {', '.join(view_only) or '—'}"
+
+        from aiogram.utils.keyboard import InlineKeyboardBuilder
+        builder = InlineKeyboardBuilder()
+        builder.button(text="➕ Пригласить ассистента", callback_data="team_invite")
+        for link in links:
+            asst = link.assistant_user
+            builder.button(
+                text=f"⚙️ {asst.full_name}",
+                callback_data=f"team_asst_{link.assistant_id}",
+            )
+        builder.adjust(1)
+        await message.answer(text, reply_markup=builder.as_markup())
+    except Exception as e:
+        log.exception("cmd_team (Моя команда): %s", e)
+        raise
 
 
 @router.callback_query(F.data == "team_invite")
