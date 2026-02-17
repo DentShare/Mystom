@@ -8,8 +8,10 @@ import time
 from urllib.parse import parse_qs, unquote
 from typing import Optional
 
-# initData считается валидным не дольше 5 минут после auth_date
-_MAX_AUTH_AGE_SECONDS = 300
+# initData — это фактически сессионный токен Mini App.
+# HMAC-подпись не даёт его подделать; auth_date — дополнительная защита от replay.
+# 24 часа — разумный баланс: пользователь не будет держать вкладку дольше.
+_MAX_AUTH_AGE_SECONDS = 86400
 
 logger = logging.getLogger(__name__)
 
@@ -102,8 +104,10 @@ def validate_init_data(init_data: str, bot_token: str) -> Optional[int]:
                 )
                 return None
 
-        # Проверяем auth_date — initData старше 5 мин может быть перехвачен
-        parsed = parse_qs(unquote(init_data), keep_blank_values=True)
+        # Проверяем auth_date — initData старше суток может быть перехвачен
+        # НЕ используем unquote() перед parse_qs: parse_qs сам декодирует значения,
+        # двойное декодирование ломает парсинг поля user (JSON с %xx внутри).
+        parsed = parse_qs(init_data, keep_blank_values=True)
         auth_date_raw = parsed.get("auth_date")
         if auth_date_raw:
             try:
