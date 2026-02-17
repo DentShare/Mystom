@@ -167,14 +167,7 @@
       try {
         const r = await fetch(url, { headers: hdrs() });
         if (r.status === 401) {
-          // Вызываем debug endpoint для диагностики
-          let debugInfo = '';
-          try {
-            const dr = await fetch(API_BASE + '/api/debug_auth', { headers: hdrs() });
-            const dd = await dr.json();
-            debugInfo = '<br><b>Debug:</b> ' + JSON.stringify(dd, null, 0);
-          } catch (_) {}
-          content.innerHTML = '<p class="msg error">401 — Не авторизован.' + debugInfo + '</p>';
+          content.innerHTML = '<p class="msg error">Не авторизован. Откройте из бота: /admin → Web App.</p>';
           return;
         }
         if (r.status === 403) { content.innerHTML = '<p class="msg error">Доступ запрещён. Только для администраторов.</p>'; return; }
