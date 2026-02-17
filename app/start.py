@@ -3,11 +3,12 @@
 либо только веб-админка, либо бот (с админкой в фоне). Не нужно менять Start Command в UI.
 
 SERVICE_TYPE=web  → только python -m admin_webapp.run_web (порт из PORT)
-SERVICE_TYPE не задан или =bot → alembic upgrade head, админка в фоне, затем бот
+SERVICE_TYPE не задан или =bot → админка в фоне, миграции, затем бот
 """
 import os
 import subprocess
 import sys
+import time
 
 # Логи в stdout для Railway
 def _log(msg: str, *args: object) -> None:
@@ -23,20 +24,29 @@ def main() -> None:
         os.execv(sys.executable, [sys.executable, "-m", "admin_webapp.run_web"])
         return
 
-    _log("Режим бота: миграции, затем веб в фоне (PORT=%s), затем бот", port)
-    # Режим бота: миграции, админка в фоне, затем бот
-    subprocess.run(
-        [sys.executable, "-m", "alembic", "upgrade", "head"],
-        check=True,
-        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    )
-    # stdout/stderr не отбрасываем — логи веб-админки должны попадать в Deploy Logs (401, validate_init_data и т.д.)
+    _log("Режим бота: веб в фоне (PORT=%s), затем миграции, затем бот", port)
+
+    # 1) Сначала запускаем веб-админку — чтобы /health отвечал пока идут миграции
     proc = subprocess.Popen(
         [sys.executable, "-m", "admin_webapp.run_web"],
         stdout=None,
         stderr=None,
     )
     _log("Веб-админка запущена в фоне (PID=%s), порт из PORT=%s", proc.pid, port)
+
+    # Даём uvicorn 2 сек на старт, чтобы /health был доступен для Railway
+    time.sleep(2)
+
+    # 2) Затем миграции (могут занять 10-30 сек)
+    _log("Запуск миграций alembic upgrade head...")
+    subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        check=True,
+        cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    )
+    _log("Миграции завершены")
+
+    # 3) Запускаем бота
     try:
         import asyncio
         from app.main import main as bot_main
