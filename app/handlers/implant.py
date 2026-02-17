@@ -9,6 +9,7 @@ from sqlalchemy import select, and_
 
 from app.database.models import User, Patient, ImplantLog
 from app.states.implant import ImplantStates
+from app.utils.permissions import can_access, FEATURE_IMPLANTS
 from app.keyboards.implant import (
     get_tooth_chart_keyboard,
     get_implant_systems_keyboard,
@@ -34,15 +35,19 @@ def _format_existing_implants(implants: list) -> str:
 @router.callback_query(F.data.startswith("implant_add_"), flags={"tier": 1})
 async def start_add_implant(
     callback: CallbackQuery,
-    user: User,
+    effective_doctor: User,
+    assistant_permissions: dict,
     state: FSMContext,
     db_session: AsyncSession
 ):
-    """Начало добавления импланта — карта зубов"""
+    """Начало добавления импланта (доступ по правам, данные врача)."""
+    if not can_access(assistant_permissions, FEATURE_IMPLANTS, "edit"):
+        await callback.answer("Нет доступа к добавлению имплантов.", show_alert=True)
+        return
     patient_id = int(callback.data.replace("implant_add_", ""))
 
     stmt = select(Patient).where(
-        and_(Patient.id == patient_id, Patient.doctor_id == user.id)
+        and_(Patient.id == patient_id, Patient.doctor_id == effective_doctor.id)
     )
     result = await db_session.execute(stmt)
     patient = result.scalar_one_or_none()
@@ -54,7 +59,7 @@ async def start_add_implant(
     stmt = select(ImplantLog).where(
         and_(
             ImplantLog.patient_id == patient_id,
-            ImplantLog.doctor_id == user.id
+            ImplantLog.doctor_id == effective_doctor.id
         )
     ).order_by(ImplantLog.operation_date)
     result = await db_session.execute(stmt)
@@ -272,7 +277,7 @@ async def process_length_manual(message: Message, state: FSMContext):
 @router.message(StateFilter(ImplantStates.enter_notes), F.text)
 async def process_implant_notes(
     message: Message,
-    user: User,
+    effective_doctor: User,
     state: FSMContext,
     db_session: AsyncSession
 ):
@@ -292,7 +297,7 @@ async def process_implant_notes(
     for tooth in selected_teeth:
         implant = ImplantLog(
             patient_id=patient_id,
-            doctor_id=user.id,
+            doctor_id=effective_doctor.id,
             tooth_number=str(tooth),
             system_name=system_name,
             implant_size=implant_size,
@@ -329,16 +334,16 @@ async def process_implant_notes(
 @router.callback_query(StateFilter(ImplantStates.add_more), F.data.startswith("implant_add_"))
 async def implant_add_more(
     callback: CallbackQuery,
-    user: User,
+    effective_doctor: User,
     state: FSMContext,
     db_session: AsyncSession
 ):
-    """Добавить ещё имплант — возврат к карте зубов"""
+    """Добавить ещё имплант — возврат к карте зубов (данные врача)."""
     patient_id = int(callback.data.replace("implant_add_", ""))
     stmt = select(ImplantLog).where(
         and_(
             ImplantLog.patient_id == patient_id,
-            ImplantLog.doctor_id == user.id
+            ImplantLog.doctor_id == effective_doctor.id
         )
     ).order_by(ImplantLog.operation_date)
     result = await db_session.execute(stmt)
@@ -384,14 +389,18 @@ async def implant_done(callback: CallbackQuery, state: FSMContext, db_session: A
 @router.callback_query(F.data.startswith("implant_card_"), flags={"tier": 1})
 async def generate_implant_card(
     callback: CallbackQuery,
-    user: User,
+    effective_doctor: User,
+    assistant_permissions: dict,
     db_session: AsyncSession
 ):
-    """Генерация PDF карты имплантации"""
+    """Генерация PDF карты имплантации (доступ по правам, данные врача)."""
+    if not can_access(assistant_permissions, FEATURE_IMPLANTS):
+        await callback.answer("Нет доступа к разделу «Импланты».", show_alert=True)
+        return
     patient_id = int(callback.data.replace("implant_card_", ""))
 
     stmt = select(Patient).where(
-        and_(Patient.id == patient_id, Patient.doctor_id == user.id)
+        and_(Patient.id == patient_id, Patient.doctor_id == effective_doctor.id)
     )
     result = await db_session.execute(stmt)
     patient = result.scalar_one_or_none()
@@ -403,7 +412,7 @@ async def generate_implant_card(
     stmt = select(ImplantLog).where(
         and_(
             ImplantLog.patient_id == patient_id,
-            ImplantLog.doctor_id == user.id
+            ImplantLog.doctor_id == effective_doctor.id
         )
     ).order_by(ImplantLog.operation_date)
 

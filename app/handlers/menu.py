@@ -5,6 +5,7 @@ from aiogram.types import Message
 
 from app.database.models import User
 from app.keyboards.main import get_main_menu_keyboard
+from app.utils.constants import TIER_NAMES
 
 router = Router(name="menu")
 
@@ -20,8 +21,7 @@ async def cmd_menu(
 ):
     """Главное меню (у ассистента — контекст врача)."""
     await state.clear()
-    tier_names = {0: "Basic", 1: "Standard", 2: "Premium"}
-    tier_name = tier_names.get(effective_doctor.subscription_tier, "Basic")
+    tier_name = TIER_NAMES.get(effective_doctor.subscription_tier, "Basic")
     if getattr(user, "role", "owner") == "assistant" and user.owner_id:
         text = (
             f"📋 Главное меню\n\n"

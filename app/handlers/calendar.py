@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import User, Appointment, ClinicLocation, Treatment
 from app.states.appointment import AppointmentStates
+from app.utils.constants import TIER_NAMES
 from app.keyboards.calendar import get_calendar_keyboard, get_time_slots_keyboard, get_schedule_dates_keyboard
 from app.services.calendar_service import (
     get_appointments_by_date,
@@ -132,8 +133,7 @@ async def process_schedule_callback(
     
     if data == "sched_back":
         await callback.message.delete()
-        tier_names = {0: "Basic", 1: "Standard", 2: "Premium"}
-        tier_name = tier_names.get(effective_doctor.subscription_tier, "Basic")
+        tier_name = TIER_NAMES.get(effective_doctor.subscription_tier, "Basic")
         text = (
             f"📋 Главное меню\n\n"
             f"👤 {user.full_name}\n"

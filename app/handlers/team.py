@@ -10,7 +10,7 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, func
 from sqlalchemy.orm import selectinload
 
 from app.database.models import User, DoctorAssistant, InviteCode
@@ -40,6 +40,11 @@ def _is_owner(user: User) -> bool:
 
 def _code_str() -> str:
     return secrets.token_hex(3).upper()  # 6 символов
+
+
+def _max_assistants_for_tier(tier: int) -> int:
+    """Лимит ассистентов по тарифу: Basic (0) — 0, Standard (1) — 1, Premium (2) — до 3."""
+    return {0: 0, 1: 1, 2: 3}.get(tier, 0)
 
 
 @router.message(F.text == "👥 Моя команда")
@@ -96,7 +101,9 @@ async def cmd_team(
 
         from aiogram.utils.keyboard import InlineKeyboardBuilder
         builder = InlineKeyboardBuilder()
-        builder.button(text="➕ Пригласить ассистента", callback_data="team_invite")
+        max_a = _max_assistants_for_tier(effective_doctor.subscription_tier)
+        if len(links) < max_a:
+            builder.button(text="➕ Пригласить ассистента", callback_data="team_invite")
         for link in links:
             asst = link.assistant_user
             builder.button(
@@ -117,9 +124,28 @@ async def team_invite(
     effective_doctor: User,
     db_session: AsyncSession,
 ):
-    """Создать код приглашения."""
+    """Создать код приглашения (с проверкой лимита по тарифу: Standard — 1, Premium — до 3)."""
     if not _is_owner(user) or user.id != effective_doctor.id:
         await callback.answer("Доступ запрещён.", show_alert=True)
+        return
+    tier = effective_doctor.subscription_tier
+    max_assistants = _max_assistants_for_tier(tier)
+    stmt_count = select(func.count(DoctorAssistant.assistant_id)).where(
+        DoctorAssistant.doctor_id == user.id
+    )
+    current_count = (await db_session.execute(stmt_count)).scalar() or 0
+    if current_count >= max_assistants:
+        if tier < 2:
+            await callback.answer(
+                f"Достигнут лимит ассистентов для вашего тарифа: Standard — 1 ассистент. "
+                "Перейдите на Premium для до 3 ассистентов.",
+                show_alert=True,
+            )
+        else:
+            await callback.answer(
+                "У вас уже максимальное число ассистентов (3). Отвяжите кого-то, чтобы пригласить нового.",
+                show_alert=True,
+            )
         return
     code = _code_str()
     invite = InviteCode(
@@ -197,7 +223,9 @@ async def team_back(callback: CallbackQuery, user: User, effective_doctor: User,
         text += f"\n• {asst.full_name}"
     from aiogram.utils.keyboard import InlineKeyboardBuilder
     builder = InlineKeyboardBuilder()
-    builder.button(text="➕ Пригласить ассистента", callback_data="team_invite")
+    max_a = _max_assistants_for_tier(effective_doctor.subscription_tier)
+    if len(links) < max_a:
+        builder.button(text="➕ Пригласить ассистента", callback_data="team_invite")
     for link in links:
         asst = link.assistant_user
         builder.button(text=f"⚙️ {asst.full_name}", callback_data=f"team_asst_{link.assistant_id}")
@@ -444,6 +472,23 @@ async def _do_bind(
             await message.answer("Код не найден или уже использован. Проверьте код и попробуйте снова.")
             return
         doctor_id = invite.doctor_id
+        stmt_doctor = select(User).where(User.id == doctor_id)
+        res_doctor = await db_session.execute(stmt_doctor)
+        doctor = res_doctor.scalar_one_or_none()
+        if not doctor:
+            await message.answer("Ошибка: врач не найден. Обратитесь в поддержку.")
+            return
+        max_a = _max_assistants_for_tier(doctor.subscription_tier)
+        stmt_count = select(func.count(DoctorAssistant.assistant_id)).where(
+            DoctorAssistant.doctor_id == doctor_id
+        )
+        current = (await db_session.execute(stmt_count)).scalar() or 0
+        if current >= max_a:
+            await message.answer(
+                "У этого врача достигнут лимит ассистентов (Standard — 1, Premium — до 3). "
+                "Попросите врача обновить тариф или освободить место в разделе «Моя команда»."
+            )
+            return
         perms = normalize_permissions(invite.permissions)
         link = DoctorAssistant(
             doctor_id=doctor_id,
@@ -459,10 +504,7 @@ async def _do_bind(
             user_db.owner_id = doctor_id
         await db_session.delete(invite)
         await db_session.commit()
-        # Копируем адрес и локацию клиники от врача к ассистенту
-        stmt_doctor = select(User).where(User.id == doctor_id)
-        res_doctor = await db_session.execute(stmt_doctor)
-        doctor = res_doctor.scalar_one_or_none()
+        # Копируем адрес и локацию клиники от врача к ассистенту (doctor уже загружен выше)
         if doctor and user_db:
             user_db.address = doctor.address
             user_db.location_lat = doctor.location_lat

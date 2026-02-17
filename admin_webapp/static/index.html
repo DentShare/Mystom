@@ -15,123 +15,168 @@
       color: var(--tg-theme-text-color, #000);
     }
     h1 { font-size: 1.25rem; margin: 0 0 12px 0; }
-    .toolbar { margin-bottom: 12px; }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 14px;
+
+    /* Stats cards */
+    .stats { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+    .stat-card {
+      flex: 1; min-width: 90px;
+      background: var(--tg-theme-secondary-bg-color, #f5f5f5);
+      border-radius: 10px; padding: 10px; text-align: center;
     }
-    th, td {
-      border: 1px solid var(--tg-theme-hint-color, #999);
-      padding: 8px;
-      text-align: left;
+    .stat-card .num { font-size: 1.5rem; font-weight: 700; }
+    .stat-card .label { font-size: 11px; color: var(--tg-theme-hint-color, #888); }
+
+    /* Toolbar */
+    .toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; align-items: center; }
+    .toolbar input[type=search] {
+      flex: 1; min-width: 140px; padding: 7px 10px; font-size: 14px;
+      border: 1px solid var(--tg-theme-hint-color, #ccc); border-radius: 8px;
+      background: var(--tg-theme-bg-color, #fff); color: var(--tg-theme-text-color, #000);
     }
-    th { background: var(--tg-theme-secondary-bg-color, #eee); }
-    select, input[type=date] {
-      padding: 6px;
-      font-size: 13px;
-      min-width: 100px;
+    .toolbar select {
+      padding: 7px; font-size: 13px; border-radius: 8px;
+      border: 1px solid var(--tg-theme-hint-color, #ccc);
+      background: var(--tg-theme-bg-color, #fff); color: var(--tg-theme-text-color, #000);
     }
+
+    /* Table */
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { border: 1px solid var(--tg-theme-hint-color, #999); padding: 6px 8px; text-align: left; }
+    th { background: var(--tg-theme-secondary-bg-color, #eee); position: sticky; top: 0; }
+    select.tier, input[type=date] { padding: 4px; font-size: 12px; min-width: 90px; }
+    .role { font-size: 11px; color: var(--tg-theme-hint-color, #888); }
+
+    /* Buttons */
     button {
-      padding: 6px 12px;
-      font-size: 13px;
-      cursor: pointer;
+      padding: 6px 12px; font-size: 13px; cursor: pointer;
       background: var(--tg-theme-button-color, #2481cc);
       color: var(--tg-theme-button-text-color, #fff);
-      border: none;
-      border-radius: 6px;
+      border: none; border-radius: 6px;
     }
     button:disabled { opacity: 0.6; cursor: not-allowed; }
+    button.secondary { background: var(--tg-theme-secondary-bg-color, #e0e0e0); color: var(--tg-theme-text-color, #333); }
+
+    /* Pagination */
+    .pagination { display: flex; gap: 8px; align-items: center; justify-content: center; margin-top: 10px; font-size: 13px; }
+
+    /* Messages */
     .msg { padding: 8px; margin: 8px 0; border-radius: 6px; }
     .msg.error { background: #fdd; color: #c00; }
     .msg.ok { background: #dfd; color: #060; }
     .loading { color: var(--tg-theme-hint-color); }
-    .id { font-size: 12px; color: var(--tg-theme-hint-color); }
+    .id { font-size: 11px; color: var(--tg-theme-hint-color); }
   </style>
 </head>
 <body>
-  <h1>🛠 Админка — пользователи подписки</h1>
+  <h1>MiniStom — Админка</h1>
   <div id="debug" class="msg" style="font-size:12px;background:var(--tg-theme-secondary-bg-color,#eee);display:none;"></div>
+  <div id="stats"></div>
   <div id="msg"></div>
   <div class="toolbar">
-    <button type="button" id="btnRefresh">Обновить список</button>
+    <input type="search" id="searchInput" placeholder="Поиск по имени, телефону, ID…">
+    <select id="tierFilter">
+      <option value="">Все тарифы</option>
+      <option value="0">Basic</option>
+      <option value="1">Standard</option>
+      <option value="2">Premium</option>
+    </select>
+    <button type="button" id="btnRefresh">Обновить</button>
   </div>
-  <div id="content">
-    <p class="loading">Загрузка…</p>
-  </div>
+  <div id="content"><p class="loading">Загрузка…</p></div>
+  <div id="paginationBar" class="pagination"></div>
 
   <script>
     const Telegram = window.Telegram?.WebApp;
-    if (Telegram) {
-      Telegram.ready();
-      Telegram.expand();
-    }
+    if (Telegram) { Telegram.ready(); Telegram.expand(); }
 
     const API_BASE = window.location.origin;
-    const DEBUG = true;  // отладка initData — поставьте false после выяснения проблемы
+    const DEBUG = false;
+    const PAGE_SIZE = 50;
+    let currentOffset = 0;
+    let totalUsers = 0;
+    let searchTimer = null;
 
-    function getInitData() {
-      return Telegram?.initData || '';
-    }
+    function getInitData() { return Telegram?.initData || ''; }
 
     function updateDebugInfo() {
       if (!DEBUG) return;
       const init = getInitData();
       const len = init ? init.length : 0;
       const ok = len >= 10;
-      const txt = 'initData: len=' + len + (ok ? ' ✓' : ' — ПУСТО или слишком короткий. Откройте из бота!');
       const el = document.getElementById('debug');
       if (el) {
-        el.textContent = txt;
+        el.textContent = 'initData: len=' + len + (ok ? ' OK' : ' — ПУСТО. Откройте из бота!');
         el.style.display = 'block';
         el.className = 'msg ' + (ok ? 'ok' : 'error');
       }
-      console.log('[MiniStom Admin] initData length:', len, ok ? '(OK)' : '(EMPTY/TOO SHORT)');
-      if (init && len <= 200) console.log('[MiniStom Admin] initData (truncated):', init.substring(0, 80) + '...');
     }
 
-    function headers() {
-      const init = getInitData();
-      return {
-        'Content-Type': 'application/json',
-        'X-Telegram-Init-Data': init,
-      };
+    function hdrs() {
+      return { 'Content-Type': 'application/json', 'X-Telegram-Init-Data': getInitData() };
     }
 
-    function showMsg(text, isError = false) {
+    function showMsg(text, isError) {
       const el = document.getElementById('msg');
       el.textContent = text;
       el.className = 'msg ' + (isError ? 'error' : 'ok');
       el.style.display = text ? 'block' : 'none';
     }
 
+    function escapeHtml(s) {
+      if (s == null) return '';
+      const d = document.createElement('div'); d.textContent = s; return d.innerHTML;
+    }
+
     const TIER_NAMES = { 0: 'Basic', 1: 'Standard', 2: 'Premium' };
 
+    /* ── Stats ── */
+    async function loadStats() {
+      try {
+        const r = await fetch(API_BASE + '/api/stats', { headers: hdrs() });
+        if (!r.ok) return;
+        const s = await r.json();
+        document.getElementById('stats').innerHTML =
+          '<div class="stats">' +
+          '<div class="stat-card"><div class="num">' + s.total_users + '</div><div class="label">Пользователей</div></div>' +
+          '<div class="stat-card"><div class="num">' + s.tier_counts.basic + '</div><div class="label">Basic</div></div>' +
+          '<div class="stat-card"><div class="num">' + s.tier_counts.standard + '</div><div class="label">Standard</div></div>' +
+          '<div class="stat-card"><div class="num">' + s.tier_counts.premium + '</div><div class="label">Premium</div></div>' +
+          '<div class="stat-card"><div class="num">' + s.total_patients + '</div><div class="label">Пациентов</div></div>' +
+          '<div class="stat-card"><div class="num">' + s.total_appointments + '</div><div class="label">Записей</div></div>' +
+          '</div>';
+      } catch (_) {}
+    }
+
+    /* ── Users ── */
     async function loadUsers() {
       updateDebugInfo();
       const content = document.getElementById('content');
       content.innerHTML = '<p class="loading">Загрузка…</p>';
-      var initData = getInitData();
+      const initData = getInitData();
       if (!initData || initData.length < 10) {
-        content.innerHTML = '<p class="msg error">Откройте админку только из Telegram: в боте напишите /admin и нажмите кнопку «Админка (Web App)». В браузере по прямой ссылке авторизация невозможна.</p>';
+        content.innerHTML = '<p class="msg error">Откройте админку из Telegram: /admin → кнопка «Админка (Web App)».</p>';
         return;
       }
+
+      const q = document.getElementById('searchInput').value.trim();
+      const tier = document.getElementById('tierFilter').value;
+      let url = API_BASE + '/api/users?offset=' + currentOffset + '&limit=' + PAGE_SIZE;
+      if (q) url += '&q=' + encodeURIComponent(q);
+      if (tier !== '') url += '&tier=' + tier;
+
       try {
-        const r = await fetch(API_BASE + '/api/users', { headers: headers() });
+        const r = await fetch(url, { headers: hdrs() });
         if (r.status === 401) {
-          content.innerHTML = '<p class="msg error">Не авторизован. Откройте админку из бота: /admin → кнопка «Админка (Web App)». Если уже открываете из бота: в Railway у сервиса, который отдаёт эту страницу, в Variables должен быть тот же BOT_TOKEN, что и у сервиса бота. Один сервис (бот+админка) — токен один; два сервиса — скопируйте BOT_TOKEN из сервиса бота в сервис админки и сделайте Redeploy.</p>';
+          content.innerHTML = '<p class="msg error">Не авторизован. Откройте из бота: /admin → Web App. Убедитесь, что BOT_TOKEN совпадает в боте и админке.</p>';
           return;
         }
-        if (r.status === 403) {
-          content.innerHTML = '<p class="msg error">Доступ запрещён. Только для администраторов.</p>';
-          return;
-        }
-        if (!r.ok) {
-          content.innerHTML = '<p class="msg error">Ошибка: ' + r.status + '</p>';
-          return;
-        }
-        const users = await r.json();
-        renderTable(users);
+        if (r.status === 403) { content.innerHTML = '<p class="msg error">Доступ запрещён. Только для администраторов.</p>'; return; }
+        if (!r.ok) { content.innerHTML = '<p class="msg error">Ошибка: ' + r.status + '</p>'; return; }
+
+        const data = await r.json();
+        totalUsers = data.total;
+        renderTable(data.users);
+        renderPagination();
       } catch (e) {
         content.innerHTML = '<p class="msg error">Ошибка сети: ' + e.message + '</p>';
       }
@@ -139,16 +184,15 @@
 
     function renderTable(users) {
       const content = document.getElementById('content');
-      if (!users.length) {
-        content.innerHTML = '<p>Пользователей нет.</p>';
-        return;
-      }
-      let html = '<table><thead><tr><th>ФИО</th><th>Telegram ID</th><th>Уровень</th><th>Подписка до</th><th></th></tr></thead><tbody>';
+      if (!users.length) { content.innerHTML = '<p>Пользователей не найдено.</p>'; return; }
+      let html = '<table><thead><tr><th>ФИО</th><th>TG ID</th><th>Роль</th><th>Уровень</th><th>Подписка до</th><th></th></tr></thead><tbody>';
       for (const u of users) {
         const endDate = u.subscription_end_date || '';
+        const roleLabel = u.role === 'assistant' ? 'ассистент' : 'врач';
         html += '<tr data-id="' + u.id + '">' +
-          '<td>' + escapeHtml(u.full_name) + '</td>' +
+          '<td>' + escapeHtml(u.full_name) + (u.phone ? '<br><span class="id">' + escapeHtml(u.phone) + '</span>' : '') + '</td>' +
           '<td class="id">' + u.telegram_id + '</td>' +
+          '<td class="role">' + roleLabel + '</td>' +
           '<td><select class="tier" data-id="' + u.id + '">' +
           [0,1,2].map(t => '<option value="' + t + '"' + (u.subscription_tier === t ? ' selected' : '') + '>' + TIER_NAMES[t] + '</option>').join('') +
           '</select></td>' +
@@ -158,57 +202,54 @@
       }
       html += '</tbody></table>';
       content.innerHTML = html;
-
       content.querySelectorAll('.btn-save').forEach(btn => {
         btn.addEventListener('click', () => saveUser(parseInt(btn.dataset.id, 10)));
       });
     }
 
-    function escapeHtml(s) {
-      if (s == null) return '';
-      const div = document.createElement('div');
-      div.textContent = s;
-      return div.innerHTML;
+    function renderPagination() {
+      const bar = document.getElementById('paginationBar');
+      if (totalUsers <= PAGE_SIZE) { bar.innerHTML = ''; return; }
+      const page = Math.floor(currentOffset / PAGE_SIZE) + 1;
+      const pages = Math.ceil(totalUsers / PAGE_SIZE);
+      bar.innerHTML =
+        '<button class="secondary" ' + (page <= 1 ? 'disabled' : '') + ' id="pgPrev">&larr;</button>' +
+        '<span>' + page + ' / ' + pages + ' (всего ' + totalUsers + ')</span>' +
+        '<button class="secondary" ' + (page >= pages ? 'disabled' : '') + ' id="pgNext">&rarr;</button>';
+      document.getElementById('pgPrev')?.addEventListener('click', () => { currentOffset = Math.max(0, currentOffset - PAGE_SIZE); loadUsers(); });
+      document.getElementById('pgNext')?.addEventListener('click', () => { currentOffset += PAGE_SIZE; loadUsers(); });
     }
 
     async function saveUser(id) {
       const row = document.querySelector('tr[data-id="' + id + '"]');
-      const tierSelect = row.querySelector('.tier');
-      const dateInput = row.querySelector('.end-date');
-      const tier = parseInt(tierSelect.value, 10);
-      const endDate = dateInput.value.trim() || null;
-
+      const tier = parseInt(row.querySelector('.tier').value, 10);
+      const endDate = row.querySelector('.end-date').value.trim() || null;
       const btn = row.querySelector('.btn-save');
       btn.disabled = true;
       try {
         const r = await fetch(API_BASE + '/api/users/' + id, {
-          method: 'PATCH',
-          headers: headers(),
-          body: JSON.stringify({
-            subscription_tier: tier,
-            subscription_end_date: endDate,
-          }),
+          method: 'PATCH', headers: hdrs(),
+          body: JSON.stringify({ subscription_tier: tier, subscription_end_date: endDate }),
         });
-        if (!r.ok) {
-          const err = await r.json().catch(() => ({}));
-          showMsg('Ошибка: ' + (err.detail || r.status), true);
-          return;
-        }
+        if (!r.ok) { const err = await r.json().catch(() => ({})); showMsg('Ошибка: ' + (err.detail || r.status), true); return; }
         showMsg('Сохранено');
         setTimeout(() => showMsg(''), 2000);
-      } catch (e) {
-        showMsg('Ошибка сети: ' + e.message, true);
-      } finally {
-        btn.disabled = false;
-      }
+        loadStats();
+      } catch (e) { showMsg('Ошибка сети: ' + e.message, true); }
+      finally { btn.disabled = false; }
     }
 
-    document.getElementById('btnRefresh').addEventListener('click', loadUsers);
+    /* ── Events ── */
+    document.getElementById('btnRefresh').addEventListener('click', () => { currentOffset = 0; loadUsers(); loadStats(); });
+    document.getElementById('tierFilter').addEventListener('change', () => { currentOffset = 0; loadUsers(); });
+    document.getElementById('searchInput').addEventListener('input', () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => { currentOffset = 0; loadUsers(); }, 350);
+    });
 
     updateDebugInfo();
-    if (Telegram) {
-      Telegram.onEvent('themeChanged', updateDebugInfo);
-    }
+    if (Telegram) Telegram.onEvent('themeChanged', updateDebugInfo);
+    loadStats();
     loadUsers();
   </script>
 </body>

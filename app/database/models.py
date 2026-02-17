@@ -62,7 +62,7 @@ class DoctorAssistant(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     
     doctor: Mapped["User"] = relationship("User", back_populates="doctor_assistant_links", foreign_keys=[doctor_id])
-    assistant_user: Mapped["User"] = relationship("User", back_populates="doctor_assistant_links", foreign_keys=[assistant_id])
+    assistant_user: Mapped["User"] = relationship("User", back_populates="assistant_link", foreign_keys=[assistant_id])
 
 
 class InviteCode(Base):
@@ -70,9 +70,10 @@ class InviteCode(Base):
     __tablename__ = "invite_codes"
     
     id: Mapped[int] = mapped_column(primary_key=True)
-    doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     code: Mapped[str] = mapped_column(String(12), unique=True)
     permissions: Mapped[dict] = mapped_column(JSON, nullable=False)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     
     doctor: Mapped["User"] = relationship("User", back_populates="invite_codes")
@@ -81,9 +82,9 @@ class InviteCode(Base):
 class ClinicLocation(Base):
     """Модель локации клиники (мульти-локации)"""
     __tablename__ = "clinic_locations"
-    
+
     id: Mapped[int] = mapped_column(primary_key=True)
-    doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     name: Mapped[str] = mapped_column(String(255))
     address: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     location_lat: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
@@ -99,9 +100,9 @@ class ClinicLocation(Base):
 class Patient(Base):
     """Модель пациента (Standard+)"""
     __tablename__ = "patients"
-    
+
     id: Mapped[int] = mapped_column(primary_key=True)
-    doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     full_name: Mapped[str] = mapped_column(String(255))
     phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     birth_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
@@ -119,9 +120,9 @@ class Patient(Base):
 class Appointment(Base):
     """Модель записи на прием"""
     __tablename__ = "appointments"
-    
+
     id: Mapped[int] = mapped_column(primary_key=True)
-    doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     patient_id: Mapped[Optional[int]] = mapped_column(ForeignKey("patients.id", ondelete="CASCADE"), nullable=True)  # nullable для Basic
     service_id: Mapped[Optional[int]] = mapped_column(ForeignKey("services.id", ondelete="SET NULL"), nullable=True)
     location_id: Mapped[Optional[int]] = mapped_column(ForeignKey("clinic_locations.id", ondelete="SET NULL"), nullable=True)
@@ -143,10 +144,10 @@ class Appointment(Base):
 class Treatment(Base):
     """Модель лечения (Premium)"""
     __tablename__ = "treatments"
-    
+
     id: Mapped[int] = mapped_column(primary_key=True)
-    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id", ondelete="CASCADE"))
-    doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id", ondelete="CASCADE"), index=True)
+    doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     appointment_id: Mapped[Optional[int]] = mapped_column(ForeignKey("appointments.id", ondelete="SET NULL"), nullable=True)
     tooth_number: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
     diagnosis: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -169,9 +170,9 @@ class Treatment(Base):
 class Service(Base):
     """Модель услуги (прайс-лист по категориям)"""
     __tablename__ = "services"
-    
+
     id: Mapped[int] = mapped_column(primary_key=True)
-    doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     category: Mapped[str] = mapped_column(String(50))  # therapy, orthopedics, surgery, orthodontics, endodontics
     name: Mapped[str] = mapped_column(String(255))
     price: Mapped[float] = mapped_column(Float)
@@ -189,10 +190,10 @@ class Service(Base):
 class ImplantLog(Base):
     """Модель имплантологической карты (Standard+)"""
     __tablename__ = "implant_logs"
-    
+
     id: Mapped[int] = mapped_column(primary_key=True)
-    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id", ondelete="CASCADE"))  # обязательный
-    doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))  # для безопасности
+    patient_id: Mapped[int] = mapped_column(ForeignKey("patients.id", ondelete="CASCADE"), index=True)
+    doctor_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     tooth_number: Mapped[str] = mapped_column(String(10))  # например "36", "11"
     system_name: Mapped[str] = mapped_column(String(255))  # название системы
     implant_size: Mapped[str] = mapped_column(String(50))  # например "4.0 x 10.0"

@@ -127,15 +127,18 @@ async def main():
                             text = format_reminder_message(apt, reminder_mins)
                             await bot.send_message(doctor.telegram_id, text)
                             apt.reminder_sent_at = datetime.now()
-                            await db_session.commit()
-                            logger.info(f"Reminder sent for appointment {apt.id} to doctor {doctor.id}")
+                            logger.info("Reminder sent for appointment %s to doctor %s", apt.id, doctor.id)
                         except Exception as e:
-                            logger.exception(f"Reminder send error: {e}")
+                            logger.exception("Reminder send error: %s", e)
+                        # Telegram rate-limit: не более 30 msg/sec
+                        await asyncio.sleep(0.05)
+                    # Один commit на всю пачку вместо коммита на каждое напоминание
+                    await db_session.commit()
 
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.exception(f"Reminder scheduler error: {e}")
+                logger.exception("Reminder scheduler error: %s", e)
 
     reminder_task = asyncio.create_task(run_reminders())
 

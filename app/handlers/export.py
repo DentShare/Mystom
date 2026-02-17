@@ -5,16 +5,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import User
 from app.services.export_service import get_patients_with_relations, build_patients_excel
+from app.utils.permissions import can_access, FEATURE_EXPORT
 
 router = Router(name="export")
 
 
 @router.message(F.text == "📊 Экспорт", flags={"tier": 2})
-async def cmd_export(message: Message, user: User, db_session: AsyncSession):
-    """Выгрузка базы пациентов со всеми данными в Excel (Premium)."""
+async def cmd_export(
+    message: Message,
+    effective_doctor: User,
+    assistant_permissions: dict,
+    db_session: AsyncSession,
+):
+    """Выгрузка базы пациентов в Excel (Premium, доступ по правам)."""
+    if not can_access(assistant_permissions, FEATURE_EXPORT):
+        await message.answer("Нет доступа к разделу «Экспорт».")
+        return
     await message.answer("⏳ Формирую выгрузку…")
     try:
-        patients = await get_patients_with_relations(db_session, user.id)
+        patients = await get_patients_with_relations(db_session, effective_doctor.id)
         if not patients:
             await message.answer(
                 "📋 У вас пока нет пациентов.\n"

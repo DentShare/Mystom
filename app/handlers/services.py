@@ -10,6 +10,7 @@ from sqlalchemy import select, delete  # pyright: ignore[reportMissingImports]
 
 from app.database.models import User, Service
 from app.utils.formatters import format_money
+from app.utils.permissions import can_access, FEATURE_SERVICES
 from app.services.service_service import (
     get_categories,
     get_services_by_category,
@@ -31,9 +32,17 @@ class ServiceEditStates(StatesGroup):
 
 
 @router.message(F.text == "💵 Прайс-лист", flags={"tier": 0})
-async def cmd_price_list(message: Message, user: User, db_session: AsyncSession):
-    """Прайс-лист — просмотр для всех, редактирование только Premium"""
-    await ensure_default_services(db_session, user.id)
+async def cmd_price_list(
+    message: Message,
+    effective_doctor: User,
+    assistant_permissions: dict,
+    db_session: AsyncSession,
+):
+    """Прайс-лист — доступ по правам, данные врача; редактирование по тарифу врача."""
+    if not can_access(assistant_permissions, FEATURE_SERVICES):
+        await message.answer("Нет доступа к разделу «Прайс-лист».")
+        return
+    await ensure_default_services(db_session, effective_doctor.id)
     categories = await get_categories()
 
     builder = InlineKeyboardBuilder()
@@ -43,7 +52,7 @@ async def cmd_price_list(message: Message, user: User, db_session: AsyncSession)
 
     hint = (
         "Выберите категорию для просмотра и редактирования услуг:"
-        if user.subscription_tier >= 2
+        if effective_doctor.subscription_tier >= 2
         else "Выберите категорию для просмотра услуг (редактирование доступно в Premium):"
     )
     await message.answer(
@@ -55,12 +64,16 @@ async def cmd_price_list(message: Message, user: User, db_session: AsyncSession)
 @router.callback_query(F.data.startswith("price_cat_"))
 async def price_list_category(
     callback: CallbackQuery,
-    user: User,
+    effective_doctor: User,
+    assistant_permissions: dict,
     db_session: AsyncSession
 ):
-    """Просмотр услуг категории (редактирование только Premium)"""
+    """Просмотр услуг категории (доступ по правам, данные врача)."""
+    if not can_access(assistant_permissions, FEATURE_SERVICES):
+        await callback.answer("Нет доступа к разделу «Прайс-лист».", show_alert=True)
+        return
     category = callback.data.replace("price_cat_", "")
-    services = await get_services_by_category(db_session, user.id, category)
+    services = await get_services_by_category(db_session, effective_doctor.id, category)
     cat_name, cat_emoji = CATEGORIES.get(category, ("", ""))
 
     lines = [f"💵 **{cat_emoji} {cat_name}**\n"]
@@ -71,12 +84,11 @@ async def price_list_category(
         lines.append("_Услуг пока нет_")
 
     builder = InlineKeyboardBuilder()
-    if user.subscription_tier >= 1:
-        # Standard+: кнопки редактирования (длительность — Standard, остальное — Premium)
+    if effective_doctor.subscription_tier >= 1 and can_access(assistant_permissions, FEATURE_SERVICES, "edit"):
         for svc in services:
             text = f"✏️ {svc.name[:30]}"
             builder.button(text=text, callback_data=f"price_edit_{svc.id}")
-        if user.subscription_tier >= 2:
+        if effective_doctor.subscription_tier >= 2:
             builder.button(text="➕ Добавить услугу", callback_data=f"price_add_{category}")
     builder.button(text="← Назад", callback_data="price_back")
     builder.adjust(1)
@@ -89,9 +101,9 @@ async def price_list_category(
 
 
 @router.callback_query(F.data == "price_back")
-async def price_back(callback: CallbackQuery, user: User, db_session: AsyncSession):
-    """Назад к списку категорий"""
-    await ensure_default_services(db_session, user.id)
+async def price_back(callback: CallbackQuery, effective_doctor: User, db_session: AsyncSession):
+    """Назад к списку категорий (данные врача)."""
+    await ensure_default_services(db_session, effective_doctor.id)
     categories = await get_categories()
 
     builder = InlineKeyboardBuilder()
@@ -101,7 +113,7 @@ async def price_back(callback: CallbackQuery, user: User, db_session: AsyncSessi
 
     hint = (
         "Выберите категорию для просмотра и редактирования:"
-        if user.subscription_tier >= 2
+        if effective_doctor.subscription_tier >= 2
         else "Выберите категорию для просмотра услуг:"
     )
     await callback.message.edit_text(
@@ -114,11 +126,15 @@ async def price_back(callback: CallbackQuery, user: User, db_session: AsyncSessi
 @router.callback_query(F.data.startswith("price_add_"))
 async def price_add_service(
     callback: CallbackQuery,
-    user: User,
+    effective_doctor: User,
+    assistant_permissions: dict,
     state: FSMContext
 ):
-    """Добавление новой услуги (только Premium)"""
-    if user.subscription_tier < 2:
+    """Добавление новой услуги (Premium, право edit)."""
+    if not can_access(assistant_permissions, FEATURE_SERVICES, "edit"):
+        await callback.answer("Нет права на редактирование прайс-листа.", show_alert=True)
+        return
+    if effective_doctor.subscription_tier < 2:
         await callback.answer("❌ Редактирование прайс-листа доступно в Premium", show_alert=True)
         return
     category = callback.data.replace("price_add_", "")
@@ -131,16 +147,20 @@ async def price_add_service(
 @router.callback_query(F.data.regexp(r"^price_edit_\d+$"))
 async def price_edit_service(
     callback: CallbackQuery,
-    user: User,
+    effective_doctor: User,
+    assistant_permissions: dict,
     state: FSMContext,
     db_session: AsyncSession
 ):
-    """Редактирование услуги — выбор действия (Standard+: длительность, Premium: всё)"""
-    if user.subscription_tier < 1:
+    """Редактирование услуги (доступ edit, тариф врача)."""
+    if not can_access(assistant_permissions, FEATURE_SERVICES, "edit"):
+        await callback.answer("Нет права на редактирование прайс-листа.", show_alert=True)
+        return
+    if effective_doctor.subscription_tier < 1:
         await callback.answer("❌ Редактирование доступно в Standard и Premium", show_alert=True)
         return
     service_id = int(callback.data.replace("price_edit_", ""))
-    service = await get_service_by_id(db_session, service_id, user.id)
+    service = await get_service_by_id(db_session, service_id, effective_doctor.id)
     if not service:
         await callback.answer("❌ Услуга не найдена", show_alert=True)
         return
@@ -153,7 +173,7 @@ async def price_edit_service(
 
     builder = InlineKeyboardBuilder()
     builder.button(text="⏱ Изменить длительность", callback_data="price_edit_duration")
-    if user.subscription_tier >= 2:
+    if effective_doctor.subscription_tier >= 2:
         builder.button(text="✏️ Изменить название", callback_data="price_edit_name")
         builder.button(text="💰 Изменить цену", callback_data="price_edit_price")
         builder.button(text="🗑 Удалить", callback_data="price_delete")
@@ -169,9 +189,9 @@ async def price_edit_service(
 
 
 @router.callback_query(F.data == "price_edit_name")
-async def price_edit_name_start(callback: CallbackQuery, user: User, state: FSMContext):
-    """Начало изменения названия (только Premium)"""
-    if user.subscription_tier < 2:
+async def price_edit_name_start(callback: CallbackQuery, effective_doctor: User, state: FSMContext):
+    """Начало изменения названия (Premium)."""
+    if effective_doctor.subscription_tier < 2:
         await callback.answer("❌ Редактирование прайс-листа доступно в Premium", show_alert=True)
         return
     await callback.message.edit_text("📝 Введите новое название услуги:")
@@ -180,9 +200,9 @@ async def price_edit_name_start(callback: CallbackQuery, user: User, state: FSMC
 
 
 @router.callback_query(F.data == "price_edit_price")
-async def price_edit_price_start(callback: CallbackQuery, user: User, state: FSMContext):
-    """Начало изменения цены (только Premium)"""
-    if user.subscription_tier < 2:
+async def price_edit_price_start(callback: CallbackQuery, effective_doctor: User, state: FSMContext):
+    """Начало изменения цены (Premium)."""
+    if effective_doctor.subscription_tier < 2:
         await callback.answer("❌ Редактирование прайс-листа доступно в Premium", show_alert=True)
         return
     await callback.message.edit_text("💰 Введите новую цену в сумах (число):")
@@ -191,9 +211,9 @@ async def price_edit_price_start(callback: CallbackQuery, user: User, state: FSM
 
 
 @router.callback_query(F.data == "price_edit_duration")
-async def price_edit_duration_start(callback: CallbackQuery, user: User, state: FSMContext):
-    """Начало изменения длительности (Standard/Premium)"""
-    if user.subscription_tier < 1:
+async def price_edit_duration_start(callback: CallbackQuery, effective_doctor: User, state: FSMContext):
+    """Начало изменения длительности (Standard/Premium)."""
+    if effective_doctor.subscription_tier < 1:
         await callback.answer("❌ Редактирование длительности доступно в Standard и Premium", show_alert=True)
         return
     await callback.message.edit_text("⏱ Введите длительность услуги в минутах (число, например 30 или 60):")
@@ -204,12 +224,12 @@ async def price_edit_duration_start(callback: CallbackQuery, user: User, state: 
 @router.callback_query(F.data == "price_delete")
 async def price_delete_service(
     callback: CallbackQuery,
-    user: User,
+    effective_doctor: User,
     state: FSMContext,
     db_session: AsyncSession
 ):
-    """Удаление услуги (только Premium)"""
-    if user.subscription_tier < 2:
+    """Удаление услуги (Premium)."""
+    if effective_doctor.subscription_tier < 2:
         await callback.answer("❌ Редактирование прайс-листа доступно в Premium", show_alert=True)
         return
     data = await state.get_data()
@@ -218,14 +238,13 @@ async def price_delete_service(
 
     stmt = delete(Service).where(
         Service.id == service_id,
-        Service.doctor_id == user.id
+        Service.doctor_id == effective_doctor.id
     )
     await db_session.execute(stmt)
     await db_session.commit()
     await state.clear()
 
-    # Возврат к списку услуг категории
-    services = await get_services_by_category(db_session, user.id, category)
+    services = await get_services_by_category(db_session, effective_doctor.id, category)
     cat_name, cat_emoji = CATEGORIES.get(category, ("", ""))
 
     lines = [f"💵 **{cat_emoji} {cat_name}**\n"]
@@ -236,10 +255,10 @@ async def price_delete_service(
         lines.append("_Услуг пока нет_")
 
     builder = InlineKeyboardBuilder()
-    if user.subscription_tier >= 1:
+    if effective_doctor.subscription_tier >= 1:
         for svc in services:
             builder.button(text=f"✏️ {svc.name[:30]}", callback_data=f"price_edit_{svc.id}")
-        if user.subscription_tier >= 2:
+        if effective_doctor.subscription_tier >= 2:
             builder.button(text="➕ Добавить услугу", callback_data=f"price_add_{category}")
     builder.button(text="← Назад", callback_data="price_back")
     builder.adjust(1)
@@ -254,12 +273,12 @@ async def price_delete_service(
 @router.message(StateFilter(ServiceEditStates.enter_name), F.text)
 async def process_service_name(
     message: Message,
-    user: User,
+    effective_doctor: User,
     state: FSMContext,
     db_session: AsyncSession
 ):
-    """Обработка названия услуги (только Premium)"""
-    if user.subscription_tier < 2:
+    """Обработка названия услуги (Premium)."""
+    if effective_doctor.subscription_tier < 2:
         await state.clear()
         await message.answer("❌ Редактирование прайс-листа доступно в Premium")
         return
@@ -280,7 +299,7 @@ async def process_service_name(
         service_id = data.get("service_id")
         stmt = select(Service).where(
             Service.id == service_id,
-            Service.doctor_id == user.id
+            Service.doctor_id == effective_doctor.id
         )
         result = await db_session.execute(stmt)
         service = result.scalar_one_or_none()
@@ -294,12 +313,12 @@ async def process_service_name(
 @router.message(StateFilter(ServiceEditStates.enter_price), F.text)
 async def process_service_price(
     message: Message,
-    user: User,
+    effective_doctor: User,
     state: FSMContext,
     db_session: AsyncSession
 ):
-    """Обработка цены услуги (только Premium)"""
-    if user.subscription_tier < 2:
+    """Обработка цены услуги (Premium)."""
+    if effective_doctor.subscription_tier < 2:
         await state.clear()
         await message.answer("❌ Редактирование прайс-листа доступно в Premium")
         return
@@ -324,7 +343,7 @@ async def process_service_price(
         service_id = data.get("service_id")
         stmt = select(Service).where(
             Service.id == service_id,
-            Service.doctor_id == user.id
+            Service.doctor_id == effective_doctor.id
         )
         result = await db_session.execute(stmt)
         service = result.scalar_one_or_none()
@@ -338,12 +357,12 @@ async def process_service_price(
 @router.message(StateFilter(ServiceEditStates.enter_duration), F.text)
 async def process_service_duration(
     message: Message,
-    user: User,
+    effective_doctor: User,
     state: FSMContext,
     db_session: AsyncSession
 ):
-    """Обработка длительности услуги (Standard+: edit, Premium: add)"""
-    if user.subscription_tier < 1:
+    """Обработка длительности услуги (Standard+: edit, Premium: add)."""
+    if effective_doctor.subscription_tier < 1:
         await state.clear()
         await message.answer("❌ Редактирование длительности доступно в Standard и Premium")
         return
@@ -362,10 +381,10 @@ async def process_service_duration(
     if action == "add":
         name = data.get("service_name")
         price = data.get("service_price", 0)
-        services = await get_services_by_category(db_session, user.id, category)
+        services = await get_services_by_category(db_session, effective_doctor.id, category)
         sort_order = max((s.sort_order for s in services), default=-1) + 1
         service = Service(
-            doctor_id=user.id,
+            doctor_id=effective_doctor.id,
             category=category,
             name=name,
             price=price,
@@ -379,7 +398,7 @@ async def process_service_duration(
         service_id = data.get("service_id")
         stmt = select(Service).where(
             Service.id == service_id,
-            Service.doctor_id == user.id
+            Service.doctor_id == effective_doctor.id
         )
         result = await db_session.execute(stmt)
         service = result.scalar_one_or_none()

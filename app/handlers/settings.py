@@ -11,14 +11,14 @@ from app.services.user_service import delete_user_from_db
 from app.states.settings import SettingsStates
 from app.services.timezone import get_common_timezones
 from app.services.reminder_service import get_reminder_minutes
+from app.utils.constants import TIER_NAMES
 
 router = Router(name="settings")
 
 
 def _get_settings_text(user: User) -> str:
     """Текст настроек"""
-    tier_names = {0: "Basic", 1: "Standard", 2: "Premium"}
-    tier_name = tier_names.get(user.subscription_tier, "Basic")
+    tier_name = TIER_NAMES.get(user.subscription_tier, "Basic")
     return (
         f"⚙️ **Настройки**\n\n"
         f"👤 ФИО: {user.full_name or 'Не указано'}\n"
@@ -317,8 +317,7 @@ async def settings_back(
 ):
     """Возврат в главное меню из настроек"""
     await state.clear()
-    tier_names = {0: "Basic", 1: "Standard", 2: "Premium"}
-    tier_name = tier_names.get(effective_doctor.subscription_tier, "Basic")
+    tier_name = TIER_NAMES.get(effective_doctor.subscription_tier, "Basic")
     text = (
         f"📋 Главное меню\n\n"
         f"👤 {user.full_name}\n"

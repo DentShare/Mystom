@@ -4,8 +4,12 @@ import hashlib
 import json
 import logging
 import os
+import time
 from urllib.parse import parse_qs, unquote
 from typing import Optional
+
+# initData считается валидным не дольше 5 минут после auth_date
+_MAX_AUTH_AGE_SECONDS = 300
 
 logger = logging.getLogger(__name__)
 
@@ -98,8 +102,23 @@ def validate_init_data(init_data: str, bot_token: str) -> Optional[int]:
                 )
                 return None
 
-        # Парсим для извлечения user (уже с декодированием)
+        # Проверяем auth_date — initData старше 5 мин может быть перехвачен
         parsed = parse_qs(unquote(init_data), keep_blank_values=True)
+        auth_date_raw = parsed.get("auth_date")
+        if auth_date_raw:
+            try:
+                auth_ts = int(auth_date_raw[0] if isinstance(auth_date_raw, list) else auth_date_raw)
+                age = time.time() - auth_ts
+                if age > _MAX_AUTH_AGE_SECONDS:
+                    logger.warning(
+                        "validate_init_data: initData устарела — auth_date=%s, возраст=%.0f сек (макс %d)",
+                        auth_ts, age, _MAX_AUTH_AGE_SECONDS,
+                    )
+                    return None
+            except (ValueError, TypeError):
+                pass
+
+        # Парсим для извлечения user
         user = parsed.get("user")
         if not user:
             logger.warning("validate_init_data: в initData нет поля user")

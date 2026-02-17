@@ -11,13 +11,23 @@ from app.states.patient import PatientStates
 from app.services.patient_service import search_patients, get_patient_by_id, get_all_patients
 from app.keyboards.main import get_cancel_keyboard
 from app.states.appointment import AppointmentStates
+from app.utils.permissions import can_access, FEATURE_PATIENTS
 
 router = Router(name="patients")
 
 
 @router.message(F.text == "👥 Пациенты", flags={'tier': 1})
-async def cmd_patients(message: Message, user: User, db_session: AsyncSession):
-    """Главное меню пациентов"""
+async def cmd_patients(
+    message: Message,
+    user: User,
+    effective_doctor: User,
+    assistant_permissions: dict,
+    db_session: AsyncSession,
+):
+    """Главное меню пациентов (доступ по правам ассистента и тарифу врача)."""
+    if not can_access(assistant_permissions, FEATURE_PATIENTS):
+        await message.answer("Нет доступа к разделу «Пациенты».")
+        return
     builder = InlineKeyboardBuilder()
     builder.button(text="➕ Добавить пациента", callback_data="patient_add")
     builder.button(text="🔍 Поиск пациента", callback_data="patient_search")
@@ -32,8 +42,15 @@ async def cmd_patients(message: Message, user: User, db_session: AsyncSession):
 
 
 @router.callback_query(F.data == "patient_add")
-async def start_add_patient(callback: CallbackQuery, state: FSMContext):
+async def start_add_patient(
+    callback: CallbackQuery,
+    assistant_permissions: dict,
+    state: FSMContext,
+):
     """Начало добавления пациента"""
+    if not can_access(assistant_permissions, FEATURE_PATIENTS, "edit"):
+        await callback.answer("Нет права на добавление пациентов.", show_alert=True)
+        return
     await callback.message.edit_text(
         "➕ **Добавление нового пациента**\n\n"
         "Введите ФИО пациента:",
@@ -60,8 +77,13 @@ async def process_patient_full_name(message: Message, state: FSMContext):
 
 
 @router.message(StateFilter(PatientStates.enter_phone))
-async def process_patient_phone(message: Message, user: User, state: FSMContext, db_session: AsyncSession):
-    """Обработка ввода телефона"""
+async def process_patient_phone(
+    message: Message,
+    effective_doctor: User,
+    state: FSMContext,
+    db_session: AsyncSession,
+):
+    """Обработка ввода телефона (пациент создаётся у врача effective_doctor)."""
     phone = None
     if message.text and message.text.strip().lower() != "/skip":
         phone = message.text.strip()
@@ -69,9 +91,8 @@ async def process_patient_phone(message: Message, user: User, state: FSMContext,
     data = await state.get_data()
     full_name = data.get("full_name")
     
-    # Создаем пациента
     patient = Patient(
-        doctor_id=user.id,
+        doctor_id=effective_doctor.id,
         full_name=full_name,
         phone=phone
     )
@@ -79,12 +100,11 @@ async def process_patient_phone(message: Message, user: User, state: FSMContext,
     await db_session.commit()
     await db_session.refresh(patient)
     
-    # Если пациент создан в рамках записи на приём — переходим к выбору услуги и времени
     if data.get("creating_for_appointment"):
         from app.handlers.calendar import _continue_appointment_creation
         await state.update_data(patient_id=patient.id, creating_for_appointment=False)
         await message.answer(f"✅ Пациент **{patient.full_name}** добавлен. Выберите услугу:")
-        await _continue_appointment_creation(message, user, state, db_session)
+        await _continue_appointment_creation(message, effective_doctor, state, db_session)
         return
     
     await message.answer(
@@ -97,8 +117,15 @@ async def process_patient_phone(message: Message, user: User, state: FSMContext,
 
 
 @router.callback_query(F.data == "patient_search")
-async def start_search_patient(callback: CallbackQuery, state: FSMContext):
+async def start_search_patient(
+    callback: CallbackQuery,
+    assistant_permissions: dict,
+    state: FSMContext,
+):
     """Начало поиска пациента"""
+    if not can_access(assistant_permissions, FEATURE_PATIENTS):
+        await callback.answer("Нет доступа к разделу «Пациенты».", show_alert=True)
+        return
     await callback.message.edit_text(
         "🔍 **Поиск пациента**\n\n"
         "Введите ФИО или телефон для поиска:",
@@ -109,14 +136,19 @@ async def start_search_patient(callback: CallbackQuery, state: FSMContext):
 
 
 @router.message(StateFilter(PatientStates.search_patient))
-async def process_patient_search(message: Message, user: User, db_session: AsyncSession, state: FSMContext):
-    """Обработка поиска пациента"""
+async def process_patient_search(
+    message: Message,
+    effective_doctor: User,
+    db_session: AsyncSession,
+    state: FSMContext,
+):
+    """Обработка поиска пациента (по данным врача)."""
     query = message.text.strip()
     if len(query) < 2:
         await message.answer("❌ Запрос должен содержать минимум 2 символа. Попробуйте еще раз:")
         return
     
-    patients = await search_patients(db_session, user.id, query)
+    patients = await search_patients(db_session, effective_doctor.id, query)
     
     if not patients:
         await message.answer(
@@ -150,10 +182,18 @@ async def process_patient_search(message: Message, user: User, db_session: Async
 
 
 @router.callback_query(F.data.startswith("patient_view_"))
-async def view_patient(callback: CallbackQuery, user: User, db_session: AsyncSession):
-    """Просмотр информации о пациенте"""
+async def view_patient(
+    callback: CallbackQuery,
+    effective_doctor: User,
+    assistant_permissions: dict,
+    db_session: AsyncSession,
+):
+    """Просмотр информации о пациенте (доступ по правам, данные врача)."""
+    if not can_access(assistant_permissions, FEATURE_PATIENTS):
+        await callback.answer("Нет доступа к разделу «Пациенты».", show_alert=True)
+        return
     patient_id = int(callback.data.replace("patient_view_", ""))
-    patient = await get_patient_by_id(db_session, patient_id, user.id)
+    patient = await get_patient_by_id(db_session, patient_id, effective_doctor.id)
     
     if not patient:
         await callback.answer("❌ Пациент не найден", show_alert=True)
@@ -164,9 +204,17 @@ async def view_patient(callback: CallbackQuery, user: User, db_session: AsyncSes
 
 
 @router.callback_query(F.data == "patient_list")
-async def list_patients(callback: CallbackQuery, user: User, db_session: AsyncSession):
-    """Список всех пациентов"""
-    patients = await get_all_patients(db_session, user.id)
+async def list_patients(
+    callback: CallbackQuery,
+    effective_doctor: User,
+    assistant_permissions: dict,
+    db_session: AsyncSession,
+):
+    """Список всех пациентов (по данным врача, доступ по правам)."""
+    if not can_access(assistant_permissions, FEATURE_PATIENTS):
+        await callback.answer("Нет доступа к разделу «Пациенты».", show_alert=True)
+        return
+    patients = await get_all_patients(db_session, effective_doctor.id)
     
     if not patients:
         await callback.message.edit_text("📋 Список пациентов пуст.")

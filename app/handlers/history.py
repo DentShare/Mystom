@@ -9,6 +9,7 @@ from sqlalchemy import select, and_, desc
 
 from app.database.models import User, Patient, Treatment
 from app.states.history import HistoryStates
+from app.utils.permissions import can_access, FEATURE_HISTORY, FEATURE_FINANCE
 from app.services.patient_service import get_all_patients
 from app.services.service_service import (
     get_categories,
@@ -25,9 +26,18 @@ router = Router(name="history")
 
 
 @router.message(F.text == "📋 История болезни", flags={'tier': 1})
-async def cmd_history(message: Message, user: User, db_session: AsyncSession):
-    """Главное меню истории болезни — выбор пациента"""
-    patients = await get_all_patients(db_session, user.id)
+async def cmd_history(
+    message: Message,
+    user: User,
+    effective_doctor: User,
+    assistant_permissions: dict,
+    db_session: AsyncSession,
+):
+    """Главное меню истории болезни (доступ по правам, данные врача)."""
+    if not can_access(assistant_permissions, FEATURE_HISTORY):
+        await message.answer("Нет доступа к разделу «История болезни».")
+        return
+    patients = await get_all_patients(db_session, effective_doctor.id)
     
     if not patients:
         await message.answer(
@@ -55,19 +65,22 @@ async def cmd_history(message: Message, user: User, db_session: AsyncSession):
 @router.callback_query(F.data.startswith("patient_history_"))
 async def view_patient_history(
     callback: CallbackQuery,
-    user: User,
+    effective_doctor: User,
+    assistant_permissions: dict,
     state: FSMContext,
     db_session: AsyncSession
 ):
-    """Просмотр истории болезни пациента"""
+    """Просмотр истории болезни пациента (доступ по правам, данные врача)."""
+    if not can_access(assistant_permissions, FEATURE_HISTORY):
+        await callback.answer("Нет доступа к разделу «История болезни».", show_alert=True)
+        return
     await state.clear()
     patient_id = int(callback.data.replace("patient_history_", ""))
     
-    # Проверяем, что пациент принадлежит врачу
     stmt = select(Patient).where(
         and_(
             Patient.id == patient_id,
-            Patient.doctor_id == user.id
+            Patient.doctor_id == effective_doctor.id
         )
     )
     result = await db_session.execute(stmt)
@@ -77,11 +90,10 @@ async def view_patient_history(
         await callback.answer("❌ Пациент не найден", show_alert=True)
         return
     
-    # Получаем историю (для Standard - это текстовые заметки из Treatment)
     stmt = select(Treatment).where(
         and_(
             Treatment.patient_id == patient_id,
-            Treatment.doctor_id == user.id
+            Treatment.doctor_id == effective_doctor.id
         )
     ).order_by(desc(Treatment.created_at))
     
@@ -102,7 +114,7 @@ async def view_patient_history(
             text_parts.append(f"\n**{i}. {date_str}**")
             
             if treatment.service_name:
-                if user.subscription_tier >= 2 and treatment.price is not None:
+                if effective_doctor.subscription_tier >= 2 and treatment.price is not None:
                     eff = treatment_effective_price(
                         treatment.price, treatment.discount_percent, treatment.discount_amount
                     )
@@ -121,7 +133,7 @@ async def view_patient_history(
                         price_str += " 💳"
                     text_parts.append(f"   🏥 Услуга: {treatment.service_name}{price_str}")
                 else:
-                    price_str = f" — {format_money(treatment.price)}" if treatment.price is not None and user.subscription_tier >= 2 else ""
+                    price_str = f" — {format_money(treatment.price)}" if treatment.price is not None and effective_doctor.subscription_tier >= 2 else ""
                     text_parts.append(f"   🏥 Услуга: {treatment.service_name}{price_str}")
             if treatment.treatment_notes:
                 text_parts.append(f"   📝 {treatment.treatment_notes}")
@@ -134,7 +146,7 @@ async def view_patient_history(
     builder.button(text="➕ Добавить запись", callback_data=f"history_add_{patient_id}")
     builder.button(text="🔩 Добавить имплант", callback_data=f"implant_add_{patient_id}")
     builder.button(text="📄 Имплантологическая карта", callback_data=f"implant_card_{patient_id}")
-    if user.subscription_tier >= 2:
+    if effective_doctor.subscription_tier >= 2:
         builder.button(text="💰 Счёт (PDF)", callback_data=f"history_invoice_{patient_id}")
         builder.button(text="💵 Внести оплату", callback_data=f"history_payment_{patient_id}")
     builder.button(text="◀️ Назад", callback_data=f"patient_view_{patient_id}")
@@ -150,14 +162,18 @@ async def view_patient_history(
 @router.callback_query(F.data.startswith("history_invoice_"), flags={"tier": 2})
 async def generate_history_invoice(
     callback: CallbackQuery,
-    user: User,
+    effective_doctor: User,
+    assistant_permissions: dict,
     db_session: AsyncSession
 ):
-    """Генерация PDF счёта по истории лечения (только Premium)"""
+    """Генерация PDF счёта по истории лечения (Premium, доступ по FEATURE_FINANCE)."""
+    if not can_access(assistant_permissions, FEATURE_FINANCE):
+        await callback.answer("Нет доступа к финансовым функциям.", show_alert=True)
+        return
     patient_id = int(callback.data.replace("history_invoice_", ""))
 
     stmt = select(Patient).where(
-        and_(Patient.id == patient_id, Patient.doctor_id == user.id)
+        and_(Patient.id == patient_id, Patient.doctor_id == effective_doctor.id)
     )
     result = await db_session.execute(stmt)
     patient = result.scalar_one_or_none()
@@ -169,7 +185,7 @@ async def generate_history_invoice(
     stmt = select(Treatment).where(
         and_(
             Treatment.patient_id == patient_id,
-            Treatment.doctor_id == user.id
+            Treatment.doctor_id == effective_doctor.id
         )
     ).order_by(Treatment.created_at)
     result = await db_session.execute(stmt)
@@ -184,7 +200,7 @@ async def generate_history_invoice(
 
         pdf_bytes = await asyncio.to_thread(
             generate_invoice_pdf,
-            user, patient, treatments
+            effective_doctor, patient, treatments
         )
         pdf_file = BufferedInputFile(
             pdf_bytes,
@@ -202,15 +218,19 @@ async def generate_history_invoice(
 @router.callback_query(F.data.startswith("history_add_"))
 async def start_add_history_entry(
     callback: CallbackQuery,
-    user: User,
+    effective_doctor: User,
+    assistant_permissions: dict,
     state: FSMContext,
     db_session: AsyncSession
 ):
-    """Начало добавления записи в историю — выбор услуги"""
+    """Начало добавления записи в историю (доступ edit по FEATURE_HISTORY)."""
+    if not can_access(assistant_permissions, FEATURE_HISTORY, "edit"):
+        await callback.answer("Нет права на добавление записей в историю.", show_alert=True)
+        return
     patient_id = int(callback.data.replace("history_add_", ""))
     await state.update_data(history_patient_id=patient_id)
 
-    await ensure_default_services(db_session, user.id)
+    await ensure_default_services(db_session, effective_doctor.id)
     categories = await get_categories()
 
     builder = InlineKeyboardBuilder()
@@ -232,16 +252,16 @@ async def start_add_history_entry(
 @router.callback_query(StateFilter(HistoryStates.select_service_category), F.data.startswith("history_cat_"))
 async def history_select_category(
     callback: CallbackQuery,
-    user: User,
+    effective_doctor: User,
     state: FSMContext,
     db_session: AsyncSession
 ):
-    """Выбор категории — показываем услуги"""
+    """Выбор категории — показываем услуги (данные врача)."""
     category = callback.data.replace("history_cat_", "")
     data = await state.get_data()
     patient_id = data.get("history_patient_id")
 
-    services = await get_services_by_category(db_session, user.id, category)
+    services = await get_services_by_category(db_session, effective_doctor.id, category)
     cat_name, cat_emoji = CATEGORIES.get(category, ("", ""))
 
     builder = InlineKeyboardBuilder()
@@ -276,14 +296,14 @@ async def history_service_manual(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(StateFilter(HistoryStates.select_service), F.data.startswith("history_back_"))
 async def history_back_to_categories(
     callback: CallbackQuery,
-    user: User,
+    effective_doctor: User,
     state: FSMContext,
     db_session: AsyncSession
 ):
-    """Назад к выбору категории"""
+    """Назад к выбору категории (данные врача)."""
     patient_id = int(callback.data.replace("history_back_", ""))
     await state.update_data(history_patient_id=patient_id)
-    await ensure_default_services(db_session, user.id)
+    await ensure_default_services(db_session, effective_doctor.id)
     categories = await get_categories()
 
     builder = InlineKeyboardBuilder()
@@ -304,20 +324,20 @@ async def history_back_to_categories(
 @router.callback_query(StateFilter(HistoryStates.select_service), F.data.startswith("history_svc_"))
 async def history_select_service(
     callback: CallbackQuery,
-    user: User,
+    effective_doctor: User,
     state: FSMContext,
     db_session: AsyncSession
 ):
-    """Выбор услуги — запрашиваем комментарий"""
+    """Выбор услуги — запрашиваем комментарий (данные врача)."""
     service_id = int(callback.data.replace("history_svc_", ""))
-    service = await get_service_by_id(db_session, service_id, user.id)
+    service = await get_service_by_id(db_session, service_id, effective_doctor.id)
     if not service:
         await callback.answer("❌ Услуга не найдена", show_alert=True)
         return
 
     await state.update_data(
         history_service_name=service.name,
-        history_service_price=service.price if user.subscription_tier >= 2 else None,
+        history_service_price=service.price if effective_doctor.subscription_tier >= 2 else None,
     )
     await callback.message.edit_text(
         f"📝 Услуга: **{service.name}**\n\n"
@@ -354,11 +374,11 @@ async def process_history_service_manual(
 @router.message(StateFilter(HistoryStates.enter_comment), F.text)
 async def process_history_comment(
     message: Message,
-    user: User,
+    effective_doctor: User,
     state: FSMContext,
     db_session: AsyncSession
 ):
-    """Обработка комментария; для Premium с ценой — запрос скидки на услугу"""
+    """Обработка комментария; для Premium с ценой — запрос скидки на услугу (данные врача)."""
     comment = message.text.strip() if message.text else ""
     if message.text and message.text.strip().lower() == "/skip":
         comment = None
@@ -374,7 +394,7 @@ async def process_history_comment(
         return
 
     stmt = select(Patient).where(
-        and_(Patient.id == patient_id, Patient.doctor_id == user.id)
+        and_(Patient.id == patient_id, Patient.doctor_id == effective_doctor.id)
     )
     result = await db_session.execute(stmt)
     patient = result.scalar_one_or_none()
@@ -386,8 +406,7 @@ async def process_history_comment(
 
     await state.update_data(history_comment=comment)
 
-    # Premium и цена задана — спрашиваем скидку на эту услугу
-    if user.subscription_tier >= 2 and service_price is not None:
+    if effective_doctor.subscription_tier >= 2 and service_price is not None:
         await message.answer(
             f"📝 Услуга: **{service_name}** — {format_money(service_price)}\n\n"
             "💸 Скидка на эту услугу: введите **процент** (например 10 или 10%) или **сумму** (например 50 000), или /skip — без скидки:"
@@ -395,8 +414,7 @@ async def process_history_comment(
         await state.set_state(HistoryStates.enter_discount)
         return
 
-    # Без шага скидки — сохраняем сразу
-    treatment = await _save_history_treatment(db_session, state, user, patient_id, service_name, service_price, comment)
+    treatment = await _save_history_treatment(db_session, state, effective_doctor, patient_id, service_name, service_price, comment)
     patient = (await db_session.execute(select(Patient).where(Patient.id == patient_id))).scalar_one_or_none()
     text = f"✅ Запись добавлена в историю!\n\n👤 Пациент: {patient.full_name}\n🏥 Услуга: {service_name}"
     if comment:
@@ -410,7 +428,7 @@ async def process_history_comment(
 async def _save_history_treatment(
     db_session: AsyncSession,
     state: FSMContext,
-    user: User,
+    effective_doctor: User,
     patient_id: int,
     service_name: str,
     service_price: float | None,
@@ -418,10 +436,10 @@ async def _save_history_treatment(
     discount_percent: float | None = None,
     discount_amount: float | None = None,
 ) -> Treatment:
-    """Создать запись Treatment и сохранить в БД. Возвращает созданную запись."""
+    """Создать запись Treatment и сохранить в БД (от имени врача effective_doctor)."""
     treatment = Treatment(
         patient_id=patient_id,
-        doctor_id=user.id,
+        doctor_id=effective_doctor.id,
         service_name=service_name,
         treatment_notes=comment,
         price=service_price,
@@ -437,11 +455,11 @@ async def _save_history_treatment(
 @router.message(StateFilter(HistoryStates.enter_discount), F.text)
 async def process_history_discount(
     message: Message,
-    user: User,
+    effective_doctor: User,
     state: FSMContext,
     db_session: AsyncSession
 ):
-    """Обработка скидки на услугу (Premium): процент, сумма или /skip"""
+    """Обработка скидки на услугу (Premium, данные врача): процент, сумма или /skip"""
     text = (message.text or "").strip().lower()
     if text == "/skip" or not text:
         discount_percent = None
@@ -478,7 +496,7 @@ async def process_history_discount(
     comment = data.get("history_comment")
 
     stmt = select(Patient).where(
-        and_(Patient.id == patient_id, Patient.doctor_id == user.id)
+        and_(Patient.id == patient_id, Patient.doctor_id == effective_doctor.id)
     )
     result = await db_session.execute(stmt)
     patient = result.scalar_one_or_none()
@@ -488,7 +506,7 @@ async def process_history_discount(
         return
 
     await _save_history_treatment(
-        db_session, state, user, patient_id, service_name, service_price, comment,
+        db_session, state, effective_doctor, patient_id, service_name, service_price, comment,
         discount_percent=discount_percent, discount_amount=discount_amount
     )
     eff = treatment_effective_price(service_price, discount_percent, discount_amount)
@@ -511,14 +529,18 @@ def _treatment_debt(t) -> float:
 @router.callback_query(F.data.startswith("history_payment_"), flags={"tier": 2})
 async def start_payment_flow(
     callback: CallbackQuery,
-    user: User,
+    effective_doctor: User,
+    assistant_permissions: dict,
     state: FSMContext,
     db_session: AsyncSession
 ):
-    """Начало внесения оплаты: показываем неоплаченные позиции и запрашиваем скидку на всю работу"""
+    """Начало внесения оплаты (Premium, доступ FEATURE_FINANCE)."""
+    if not can_access(assistant_permissions, FEATURE_FINANCE, "edit"):
+        await callback.answer("Нет доступа к внесению оплаты.", show_alert=True)
+        return
     patient_id = int(callback.data.replace("history_payment_", ""))
     stmt = select(Patient).where(
-        and_(Patient.id == patient_id, Patient.doctor_id == user.id)
+        and_(Patient.id == patient_id, Patient.doctor_id == effective_doctor.id)
     )
     result = await db_session.execute(stmt)
     patient = result.scalar_one_or_none()
@@ -529,7 +551,7 @@ async def start_payment_flow(
     stmt = select(Treatment).where(
         and_(
             Treatment.patient_id == patient_id,
-            Treatment.doctor_id == user.id
+            Treatment.doctor_id == effective_doctor.id
         )
     ).order_by(Treatment.id)
     result = await db_session.execute(stmt)
@@ -571,11 +593,11 @@ async def start_payment_flow(
 @router.message(StateFilter(HistoryStates.payment_whole_discount), F.text)
 async def process_payment_whole_discount(
     message: Message,
-    user: User,
+    effective_doctor: User,
     state: FSMContext,
     db_session: AsyncSession
 ):
-    """Скидка на всю работу: сумма или %, или /skip"""
+    """Скидка на всю работу: сумма или %, или /skip (данные врача)."""
     text = (message.text or "").strip().lower()
     whole_discount = 0.0
     if text and text != "/skip":
@@ -610,7 +632,7 @@ async def process_payment_whole_discount(
     stmt = select(Treatment).where(
         and_(
             Treatment.patient_id == patient_id,
-            Treatment.doctor_id == user.id
+            Treatment.doctor_id == effective_doctor.id
         )
     ).order_by(Treatment.id)
     result = await db_session.execute(stmt)
@@ -644,11 +666,11 @@ async def process_payment_whole_discount(
 @router.message(StateFilter(HistoryStates.payment_amount), F.text)
 async def process_payment_amount(
     message: Message,
-    user: User,
+    effective_doctor: User,
     state: FSMContext,
     db_session: AsyncSession
 ):
-    """Внесённая сумма — проверка на превышение итога, затем выбор способа оплаты"""
+    """Внесённая сумма — проверка на превышение итога, затем выбор способа оплаты (данные врача)."""
     try:
         num_str = (message.text or "").replace(" ", "").replace(",", ".").strip()
         amount = float(num_str)
@@ -667,7 +689,7 @@ async def process_payment_amount(
     stmt = select(Treatment).where(
         and_(
             Treatment.patient_id == patient_id,
-            Treatment.doctor_id == user.id
+            Treatment.doctor_id == effective_doctor.id
         )
     ).order_by(Treatment.id)
     result = await db_session.execute(stmt)
@@ -715,11 +737,11 @@ async def process_payment_amount(
 )
 async def process_payment_method(
     callback: CallbackQuery,
-    user: User,
+    effective_doctor: User,
     state: FSMContext,
     db_session: AsyncSession
 ):
-    """Способ оплаты — распределяем сумму по позициям и сохраняем"""
+    """Способ оплаты — распределяем сумму по позициям и сохраняем (данные врача)."""
     method_map = {"pay_method_cash": "cash", "pay_method_card": "card", "pay_method_transfer": "transfer"}
     payment_method = method_map.get(callback.data, "cash")
 
@@ -730,7 +752,7 @@ async def process_payment_method(
     whole_percent = data.get("payment_whole_discount_percent")
 
     stmt = select(Patient).where(
-        and_(Patient.id == patient_id, Patient.doctor_id == user.id)
+        and_(Patient.id == patient_id, Patient.doctor_id == effective_doctor.id)
     )
     result = await db_session.execute(stmt)
     patient = result.scalar_one_or_none()
@@ -742,7 +764,7 @@ async def process_payment_method(
     stmt = select(Treatment).where(
         and_(
             Treatment.patient_id == patient_id,
-            Treatment.doctor_id == user.id
+            Treatment.doctor_id == effective_doctor.id
         )
     ).order_by(Treatment.id)
     result = await db_session.execute(stmt)

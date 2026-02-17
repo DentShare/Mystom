@@ -18,7 +18,10 @@ def _async_database_url(url: str) -> str:
 
 # Создание асинхронного движка БД (обязательно postgresql+asyncpg, иначе Railway подхватит psycopg2)
 _db_url = _async_database_url(Config.DATABASE_URL)
-assert "+asyncpg" in _db_url, "DATABASE_URL must use postgresql+asyncpg for async engine"
+if "+asyncpg" not in _db_url:
+    raise RuntimeError(
+        f"DATABASE_URL must use postgresql+asyncpg for async engine, got: {_db_url[:30]}..."
+    )
 engine = create_async_engine(
     _db_url,
     echo=False,  # Установить True для отладки SQL запросов

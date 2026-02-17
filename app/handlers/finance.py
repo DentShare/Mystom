@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, func
 from app.database.models import User, Patient, Treatment, Appointment
 from app.utils.formatters import format_money, treatment_effective_price
+from app.utils.permissions import can_access, FEATURE_FINANCE
 
 router = Router(name="finance")
 
@@ -25,11 +26,14 @@ def _patient_total_debt(treatments: list[Treatment]) -> float:
 @router.message(F.text == "💰 Финансы", flags={"tier": 2})
 async def cmd_finance(
     message: Message,
-    user: User,
     effective_doctor: User,
+    assistant_permissions: dict,
     db_session: AsyncSession,
 ):
-    """Главное меню финансов (по данным врача для ассистента)."""
+    """Главное меню финансов (доступ по правам, данные врача)."""
+    if not can_access(assistant_permissions, FEATURE_FINANCE):
+        await message.answer("Нет доступа к разделу «Финансы».")
+        return
     doctor_id = effective_doctor.id
     stmt = select(
         func.coalesce(func.sum(Treatment.price), 0).label("total"),
@@ -59,11 +63,14 @@ async def cmd_finance(
 @router.callback_query(F.data == "finance_stats", flags={"tier": 2})
 async def finance_stats_menu(
     callback: CallbackQuery,
-    user: User,
     effective_doctor: User,
+    assistant_permissions: dict,
     db_session: AsyncSession,
 ):
-    """Выбор периода для статистики."""
+    """Выбор периода для статистики (доступ по правам)."""
+    if not can_access(assistant_permissions, FEATURE_FINANCE):
+        await callback.answer("Нет доступа к разделу «Финансы».", show_alert=True)
+        return
     builder = InlineKeyboardBuilder()
     builder.button(text="📅 Вся история", callback_data="finance_stats_all")
     builder.button(text="За 7 дней", callback_data="finance_stats_7")
@@ -101,11 +108,14 @@ def _period_range(period_key: str) -> tuple[datetime | None, datetime | None]:
 @router.callback_query(F.data.regexp(r"^finance_stats_(all|7|30|90|month)$"), flags={"tier": 2})
 async def finance_stats_show(
     callback: CallbackQuery,
-    user: User,
     effective_doctor: User,
+    assistant_permissions: dict,
     db_session: AsyncSession,
 ):
-    """Показать статистику за выбранный период (или за всю историю)."""
+    """Показать статистику за выбранный период (доступ по правам)."""
+    if not can_access(assistant_permissions, FEATURE_FINANCE):
+        await callback.answer("Нет доступа к разделу «Финансы».", show_alert=True)
+        return
     period_key = callback.data.replace("finance_stats_", "")
     start, end = _period_range(period_key)
     doctor_id = effective_doctor.id
@@ -214,11 +224,14 @@ async def finance_stats_show(
 @router.callback_query(F.data == "finance_payments", flags={"tier": 2})
 async def finance_payments_list(
     callback: CallbackQuery,
-    user: User,
     effective_doctor: User,
+    assistant_permissions: dict,
     db_session: AsyncSession,
 ):
-    """Список пациентов: 🟢 всё закрыто, 🔴 должник. Клик — внести оплату."""
+    """Список пациентов с долгом (доступ по правам)."""
+    if not can_access(assistant_permissions, FEATURE_FINANCE):
+        await callback.answer("Нет доступа к разделу «Финансы».", show_alert=True)
+        return
     doctor_id = effective_doctor.id
     stmt = select(Patient).where(Patient.doctor_id == doctor_id).order_by(Patient.full_name)
     res = await db_session.execute(stmt)
@@ -264,11 +277,14 @@ async def finance_payments_list(
 @router.callback_query(F.data == "finance_back", flags={"tier": 2})
 async def finance_back(
     callback: CallbackQuery,
-    user: User,
     effective_doctor: User,
+    assistant_permissions: dict,
     db_session: AsyncSession,
 ):
-    """Вернуться в главное меню финансов."""
+    """Вернуться в главное меню финансов (доступ по правам)."""
+    if not can_access(assistant_permissions, FEATURE_FINANCE):
+        await callback.answer("Нет доступа к разделу «Финансы».", show_alert=True)
+        return
     doctor_id = effective_doctor.id
     stmt = select(
         func.coalesce(func.sum(Treatment.price), 0).label("total"),

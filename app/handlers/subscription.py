@@ -6,10 +6,9 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.database.models import User
 from app.config import Config
+from app.utils.constants import TIER_NAMES
 
 router = Router(name="subscription")
-
-TIER_NAMES = {0: "Basic", 1: "Standard", 2: "Premium"}
 
 # Подробный FAQ: что входит в каждый уровень, за что платят
 FAQ_TEXT = """

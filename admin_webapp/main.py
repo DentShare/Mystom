@@ -14,16 +14,16 @@ if str(ROOT) not in sys.path:
 from datetime import datetime
 from typing import Optional
 
-from fastapi import FastAPI, Depends, HTTPException, Header, Request
+from fastapi import FastAPI, Depends, HTTPException, Header, Request, Query
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Config
 from app.database.base import async_session_maker
-from app.database.models import User
+from app.database.models import User, Patient, Appointment, Treatment
 
 from admin_webapp.auth import validate_init_data
 
@@ -81,7 +81,6 @@ def _check_admin_auth(
 ) -> int:
     """Проверка initData и прав админа. Возвращает telegram_id или raises HTTPException."""
     if request_host is not None:
-        print(f"[admin_webapp] {endpoint} — запрос с Host={request_host}", flush=True)
         logger.info("[%s] запрос с Host=%s", endpoint, request_host)
     if not x_telegram_init_data:
         logger.warning("[%s] 401: заголовок X-Telegram-Init-Data отсутствует или пустой", endpoint)
@@ -111,29 +110,107 @@ async def api_list_users(
     request: Request,
     db: AsyncSession = Depends(get_db),
     x_telegram_init_data: Optional[str] = Header(None),
+    q: Optional[str] = Query(None, description="Поиск по имени, телефону или telegram_id"),
+    tier: Optional[int] = Query(None, description="Фильтр по уровню подписки"),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
 ):
-    """Список пользователей (только для админов)."""
+    """Список пользователей с поиском, фильтром и пагинацией."""
     _check_admin_auth("api_users", x_telegram_init_data, request.headers.get("host"))
 
-    result = await db.execute(
-        select(User).order_by(User.created_at.desc()).limit(200)
-    )
+    stmt = select(User)
+
+    # Поиск
+    if q and q.strip():
+        search = f"%{q.strip()}%"
+        # Если строка — число, ищем также по telegram_id
+        if q.strip().isdigit():
+            stmt = stmt.where(
+                or_(
+                    User.full_name.ilike(search),
+                    User.phone.ilike(search),
+                    User.telegram_id == int(q.strip()),
+                )
+            )
+        else:
+            stmt = stmt.where(
+                or_(
+                    User.full_name.ilike(search),
+                    User.phone.ilike(search),
+                )
+            )
+
+    # Фильтр по тарифу
+    if tier is not None:
+        stmt = stmt.where(User.subscription_tier == tier)
+
+    # Общее количество (для пагинации)
+    count_result = await db.execute(select(func.count()).select_from(stmt.subquery()))
+    total = count_result.scalar() or 0
+
+    # Данные с пагинацией
+    stmt = stmt.order_by(User.created_at.desc()).offset(offset).limit(limit)
+    result = await db.execute(stmt)
     users = list(result.scalars().all())
-    return [
-        {
-            "id": u.id,
-            "telegram_id": u.telegram_id,
-            "full_name": u.full_name or "",
-            "specialization": u.specialization or "",
-            "subscription_tier": u.subscription_tier,
-            "subscription_end_date": (
-                u.subscription_end_date.isoformat()[:10]
-                if u.subscription_end_date else None
-            ),
-            "created_at": u.created_at.isoformat() if u.created_at else None,
-        }
-        for u in users
-    ]
+
+    return {
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "users": [
+            {
+                "id": u.id,
+                "telegram_id": u.telegram_id,
+                "full_name": u.full_name or "",
+                "specialization": u.specialization or "",
+                "phone": u.phone or "",
+                "role": getattr(u, "role", "owner"),
+                "subscription_tier": u.subscription_tier,
+                "subscription_end_date": (
+                    u.subscription_end_date.isoformat()[:10]
+                    if u.subscription_end_date else None
+                ),
+                "created_at": u.created_at.isoformat() if u.created_at else None,
+            }
+            for u in users
+        ],
+    }
+
+
+@app.get("/api/stats")
+async def api_stats(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    x_telegram_init_data: Optional[str] = Header(None),
+):
+    """Статистика проекта для дашборда."""
+    _check_admin_auth("api_stats", x_telegram_init_data, request.headers.get("host"))
+
+    # Кол-во пользователей по тарифам
+    tier_counts = {}
+    for tier_val in (0, 1, 2):
+        r = await db.execute(
+            select(func.count()).where(User.subscription_tier == tier_val)
+        )
+        tier_counts[tier_val] = r.scalar() or 0
+    total_users = sum(tier_counts.values())
+
+    # Кол-во пациентов, записей, лечений
+    patients_count = (await db.execute(select(func.count()).select_from(Patient))).scalar() or 0
+    appointments_count = (await db.execute(select(func.count()).select_from(Appointment))).scalar() or 0
+    treatments_count = (await db.execute(select(func.count()).select_from(Treatment))).scalar() or 0
+
+    return {
+        "total_users": total_users,
+        "tier_counts": {
+            "basic": tier_counts[0],
+            "standard": tier_counts[1],
+            "premium": tier_counts[2],
+        },
+        "total_patients": patients_count,
+        "total_appointments": appointments_count,
+        "total_treatments": treatments_count,
+    }
 
 
 class UpdateUserBody(BaseModel):
@@ -150,30 +227,43 @@ async def api_update_user(
     x_telegram_init_data: Optional[str] = Header(None),
 ):
     """Обновить уровень подписки и/или дату окончания (только админ)."""
-    _check_admin_auth("api_update_user", x_telegram_init_data, request.headers.get("host"))
+    admin_id = _check_admin_auth("api_update_user", x_telegram_init_data, request.headers.get("host"))
 
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    changes = []
     if body.subscription_tier is not None:
         if body.subscription_tier not in (0, 1, 2):
             raise HTTPException(status_code=400, detail="tier must be 0, 1 or 2")
+        if user.subscription_tier != body.subscription_tier:
+            changes.append(f"tier: {user.subscription_tier} → {body.subscription_tier}")
         user.subscription_tier = body.subscription_tier
     if body.subscription_end_date is not None:
+        old_date = user.subscription_end_date.isoformat()[:10] if user.subscription_end_date else "null"
         if body.subscription_end_date == "" or body.subscription_end_date.lower() == "null":
             user.subscription_end_date = None
+            changes.append(f"end_date: {old_date} → null")
         else:
             try:
                 user.subscription_end_date = datetime.strptime(
                     body.subscription_end_date.strip()[:10], "%Y-%m-%d"
                 )
+                changes.append(f"end_date: {old_date} → {body.subscription_end_date.strip()[:10]}")
             except ValueError:
                 raise HTTPException(
                     status_code=400,
                     detail="subscription_end_date must be YYYY-MM-DD",
                 )
+
+    if changes:
+        logger.info(
+            "AUDIT: admin=%s изменил user=%s (%s): %s",
+            admin_id, user_id, user.full_name, "; ".join(changes),
+        )
+
     await db.commit()
     await db.refresh(user)
     return {
@@ -188,11 +278,16 @@ async def api_update_user(
     }
 
 
+# Health check для Railway (без авторизации)
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
 # Раздача статики (index.html и т.д.)
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     host = request.headers.get("host", "(нет)")
-    print(f"[admin_webapp] GET / — открыта главная, Host={host}", flush=True)
     logger.info("GET / запрос, Host=%s", host)
     path = STATIC_DIR / "index.html"
     if not path.exists():

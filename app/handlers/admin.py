@@ -9,12 +9,11 @@ from sqlalchemy import select
 from app.config import Config
 from app.database.models import User
 from app.services.user_service import delete_user_from_db
+from app.utils.constants import TIER_NAMES
 
 import logging
 router = Router(name="admin")
 _admin_log = logging.getLogger("app.handlers.admin")
-
-TIER_NAMES = {0: "Basic", 1: "Standard", 2: "Premium"}
 
 
 def _is_admin(telegram_id: int) -> bool:
