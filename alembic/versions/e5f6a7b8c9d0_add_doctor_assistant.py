@@ -1,4 +1,4 @@
-g"""add_doctor_assistant role owner_id and doctor_assistant table
+"""add_doctor_assistant role owner_id and doctor_assistant table
 
 Revision ID: e5f6a7b8c9d0
 Revises: d4e5f6a7b8c9
