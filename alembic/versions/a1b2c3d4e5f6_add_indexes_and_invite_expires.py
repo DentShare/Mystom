@@ -18,9 +18,8 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # InviteCode: expires_at + index on doctor_id
+    # InviteCode: expires_at (index on doctor_id already exists from e5f6a7b8c9d0)
     op.add_column("invite_codes", sa.Column("expires_at", sa.DateTime(), nullable=True))
-    op.create_index("ix_invite_codes_doctor_id", "invite_codes", ["doctor_id"])
 
     # Indexes on doctor_id for all tables that query by doctor
     op.create_index("ix_patients_doctor_id", "patients", ["doctor_id"])
@@ -42,5 +41,5 @@ def downgrade() -> None:
     op.drop_index("ix_services_doctor_id", "services")
     op.drop_index("ix_appointments_doctor_id", "appointments")
     op.drop_index("ix_patients_doctor_id", "patients")
-    op.drop_index("ix_invite_codes_doctor_id", "invite_codes")
+    # ix_invite_codes_doctor_id принадлежит миграции e5f6a7b8c9d0, не трогаем
     op.drop_column("invite_codes", "expires_at")
