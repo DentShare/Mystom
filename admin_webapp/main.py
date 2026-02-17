@@ -284,6 +284,43 @@ async def health():
     return {"status": "ok"}
 
 
+# Временный диагностический эндпоинт (убрать после отладки)
+@app.get("/api/debug_auth")
+async def debug_auth(
+    request: Request,
+    x_telegram_init_data: Optional[str] = Header(None),
+):
+    """Показывает шаги валидации initData без require_admin."""
+    info: dict = {"step": "start", "bot_token_len": len(Config.BOT_TOKEN), "bot_token_set": bool(Config.BOT_TOKEN)}
+    if not x_telegram_init_data:
+        info["error"] = "no X-Telegram-Init-Data header"
+        return info
+    info["init_data_len"] = len(x_telegram_init_data)
+
+    # Парсим ключи
+    keys_found = []
+    hash_present = False
+    for part in x_telegram_init_data.split("&"):
+        if "=" not in part:
+            continue
+        k, _, _ = part.partition("=")
+        keys_found.append(k)
+        if k == "hash":
+            hash_present = True
+    info["keys"] = keys_found
+    info["hash_present"] = hash_present
+
+    # Валидация
+    user_id = validate_init_data(x_telegram_init_data, Config.BOT_TOKEN)
+    info["user_id"] = user_id
+    info["valid"] = user_id is not None
+    if user_id is not None:
+        info["is_admin"] = user_id in Config.ADMIN_IDS
+        info["admin_ids"] = Config.ADMIN_IDS
+    info["step"] = "done"
+    return info
+
+
 # Раздача статики (index.html и т.д.)
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
