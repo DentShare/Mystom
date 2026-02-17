@@ -290,34 +290,64 @@ async def debug_auth(
     request: Request,
     x_telegram_init_data: Optional[str] = Header(None),
 ):
-    """Показывает шаги валидации initData без require_admin."""
-    info: dict = {"step": "start", "bot_token_len": len(Config.BOT_TOKEN), "bot_token_set": bool(Config.BOT_TOKEN)}
+    """Детальная диагностика валидации initData."""
+    import hmac as _hmac
+    import hashlib as _hashlib
+
+    info: dict = {"bot_token_len": len(Config.BOT_TOKEN), "bot_token_set": bool(Config.BOT_TOKEN)}
     if not x_telegram_init_data:
         info["error"] = "no X-Telegram-Init-Data header"
         return info
     info["init_data_len"] = len(x_telegram_init_data)
 
-    # Парсим ключи
-    keys_found = []
-    hash_present = False
+    # Парсим initData
+    pairs_all = []
+    hash_val = None
     for part in x_telegram_init_data.split("&"):
         if "=" not in part:
             continue
-        k, _, _ = part.partition("=")
-        keys_found.append(k)
+        k, _, v = part.partition("=")
         if k == "hash":
-            hash_present = True
-    info["keys"] = keys_found
-    info["hash_present"] = hash_present
+            hash_val = v
+        else:
+            pairs_all.append((k, v))
+    info["keys"] = [k for k, _ in pairs_all]
+    info["hash_present"] = hash_val is not None
+    info["hash_first12"] = (hash_val or "")[:12]
 
-    # Валидация
-    user_id = validate_init_data(x_telegram_init_data, Config.BOT_TOKEN)
-    info["user_id"] = user_id
-    info["valid"] = user_id is not None
-    if user_id is not None:
-        info["is_admin"] = user_id in Config.ADMIN_IDS
-        info["admin_ids"] = Config.ADMIN_IDS
-    info["step"] = "done"
+    if not hash_val or not Config.BOT_TOKEN:
+        info["error"] = "no hash or no bot_token"
+        return info
+
+    secret = _hmac.new(b"WebAppData", Config.BOT_TOKEN.encode(), _hashlib.sha256).digest()
+
+    # Вариант 1: ВСЕ поля кроме hash (включая signature)
+    pairs_with_sig = sorted(pairs_all, key=lambda x: x[0])
+    dcs_with_sig = "\n".join(f"{k}={v}" for k, v in pairs_with_sig)
+    h_with_sig = _hmac.new(secret, dcs_with_sig.encode(), _hashlib.sha256).hexdigest()
+    info["with_signature"] = {
+        "computed_first12": h_with_sig[:12],
+        "match": _hmac.compare_digest(h_with_sig, hash_val),
+    }
+
+    # Вариант 2: ВСЕ поля кроме hash И signature
+    pairs_no_sig = sorted([(k, v) for k, v in pairs_all if k != "signature"], key=lambda x: x[0])
+    dcs_no_sig = "\n".join(f"{k}={v}" for k, v in pairs_no_sig)
+    h_no_sig = _hmac.new(secret, dcs_no_sig.encode(), _hashlib.sha256).hexdigest()
+    info["without_signature"] = {
+        "computed_first12": h_no_sig[:12],
+        "match": _hmac.compare_digest(h_no_sig, hash_val),
+    }
+
+    # Какой вариант сработал?
+    if info["with_signature"]["match"]:
+        info["result"] = "OK: signature должен быть В data_check_string"
+    elif info["without_signature"]["match"]:
+        info["result"] = "OK: signature НЕ должен быть в data_check_string"
+    else:
+        info["result"] = "FAIL: ни один вариант не совпал — BOT_TOKEN скорее всего не совпадает с тем что в боте"
+        info["bot_token_first8"] = Config.BOT_TOKEN[:8]
+
     return info
 
 
