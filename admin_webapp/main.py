@@ -290,63 +290,73 @@ async def debug_auth(
     request: Request,
     x_telegram_init_data: Optional[str] = Header(None),
 ):
-    """Детальная диагностика валидации initData."""
+    """Детальная диагностика: 4 варианта HMAC (raw/decoded × with/without signature)."""
     import hmac as _hmac
     import hashlib as _hashlib
+    from urllib.parse import unquote as _unquote
 
-    info: dict = {"bot_token_len": len(Config.BOT_TOKEN), "bot_token_set": bool(Config.BOT_TOKEN)}
+    info: dict = {"bot_token_len": len(Config.BOT_TOKEN)}
     if not x_telegram_init_data:
-        info["error"] = "no X-Telegram-Init-Data header"
+        info["error"] = "no header"
         return info
-    info["init_data_len"] = len(x_telegram_init_data)
 
-    # Парсим initData
-    pairs_all = []
+    raw = x_telegram_init_data
+    info["init_data_len"] = len(raw)
+    info["has_percent"] = "%" in raw
+    info["first80"] = raw[:80]
+
+    # --- Парсим RAW initData ---
+    pairs_raw = []
     hash_val = None
-    for part in x_telegram_init_data.split("&"):
+    for part in raw.split("&"):
         if "=" not in part:
             continue
         k, _, v = part.partition("=")
         if k == "hash":
             hash_val = v
         else:
-            pairs_all.append((k, v))
-    info["keys"] = [k for k, _ in pairs_all]
-    info["hash_present"] = hash_val is not None
+            pairs_raw.append((k, v))
+
+    info["keys"] = [k for k, _ in pairs_raw]
     info["hash_first12"] = (hash_val or "")[:12]
 
-    if not hash_val or not Config.BOT_TOKEN:
-        info["error"] = "no hash or no bot_token"
+    if not hash_val:
+        info["error"] = "no hash"
         return info
+
+    # --- Парсим DECODED initData ---
+    decoded = _unquote(raw)
+    pairs_dec = []
+    for part in decoded.split("&"):
+        if "=" not in part:
+            continue
+        k, _, v = part.partition("=")
+        if k != "hash":
+            pairs_dec.append((k, v))
 
     secret = _hmac.new(b"WebAppData", Config.BOT_TOKEN.encode(), _hashlib.sha256).digest()
 
-    # Вариант 1: ВСЕ поля кроме hash (включая signature)
-    pairs_with_sig = sorted(pairs_all, key=lambda x: x[0])
-    dcs_with_sig = "\n".join(f"{k}={v}" for k, v in pairs_with_sig)
-    h_with_sig = _hmac.new(secret, dcs_with_sig.encode(), _hashlib.sha256).hexdigest()
-    info["with_signature"] = {
-        "computed_first12": h_with_sig[:12],
-        "match": _hmac.compare_digest(h_with_sig, hash_val),
-    }
+    def try_hmac(pairs, label, exclude_sig=False):
+        p = [(k, v) for k, v in pairs if not (exclude_sig and k == "signature")]
+        p.sort(key=lambda x: x[0])
+        dcs = "\n".join(f"{k}={v}" for k, v in p)
+        h = _hmac.new(secret, dcs.encode(), _hashlib.sha256).hexdigest()
+        return {"computed12": h[:12], "match": _hmac.compare_digest(h, hash_val)}
 
-    # Вариант 2: ВСЕ поля кроме hash И signature
-    pairs_no_sig = sorted([(k, v) for k, v in pairs_all if k != "signature"], key=lambda x: x[0])
-    dcs_no_sig = "\n".join(f"{k}={v}" for k, v in pairs_no_sig)
-    h_no_sig = _hmac.new(secret, dcs_no_sig.encode(), _hashlib.sha256).hexdigest()
-    info["without_signature"] = {
-        "computed_first12": h_no_sig[:12],
-        "match": _hmac.compare_digest(h_no_sig, hash_val),
-    }
+    # 4 варианта
+    info["A_raw_withSig"] = try_hmac(pairs_raw, "raw+sig")
+    info["B_raw_noSig"] = try_hmac(pairs_raw, "raw-sig", exclude_sig=True)
+    info["C_dec_withSig"] = try_hmac(pairs_dec, "dec+sig")
+    info["D_dec_noSig"] = try_hmac(pairs_dec, "dec-sig", exclude_sig=True)
 
-    # Какой вариант сработал?
-    if info["with_signature"]["match"]:
-        info["result"] = "OK: signature должен быть В data_check_string"
-    elif info["without_signature"]["match"]:
-        info["result"] = "OK: signature НЕ должен быть в data_check_string"
+    # Результат
+    for key in ["A_raw_withSig", "B_raw_noSig", "C_dec_withSig", "D_dec_noSig"]:
+        if info[key]["match"]:
+            info["winner"] = key
+            break
     else:
-        info["result"] = "FAIL: ни один вариант не совпал — BOT_TOKEN скорее всего не совпадает с тем что в боте"
-        info["bot_token_first8"] = Config.BOT_TOKEN[:8]
+        info["winner"] = "NONE"
+        info["bot_token_first10"] = Config.BOT_TOKEN[:10]
 
     return info
 
