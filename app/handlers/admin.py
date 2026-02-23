@@ -1,4 +1,7 @@
+import asyncio
+import logging
 from datetime import datetime, timedelta
+
 from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message, WebAppInfo
@@ -10,8 +13,6 @@ from app.config import Config
 from app.database.models import User
 from app.services.user_service import delete_user_from_db
 from app.utils.constants import TIER_NAMES
-
-import logging
 router = Router(name="admin")
 _admin_log = logging.getLogger("app.handlers.admin")
 
@@ -291,13 +292,21 @@ async def cmd_admin_broadcast(message: Message, db_session: AsyncSession):
         )
         return
 
-    stmt = select(User.telegram_id).distinct()
+    stmt = select(User).distinct(User.telegram_id)
     result = await db_session.execute(stmt)
-    user_ids = [row[0] for row in result.fetchall()]
+    users = list(result.scalars().all())
 
-    # Не слать админам и себе, если не нужно — можно убрать фильтр
+    # Не слать админам; пропускать opt-out
     admin_ids_set = set(Config.ADMIN_IDS)
-    to_send = [uid for uid in user_ids if uid not in admin_ids_set]
+    to_send = []
+    skipped = 0
+    for u in users:
+        if u.telegram_id in admin_ids_set:
+            continue
+        if (u.settings or {}).get("broadcast_opt_out"):
+            skipped += 1
+            continue
+        to_send.append(u.telegram_id)
 
     if not to_send:
         await message.answer("📋 Нет пользователей для рассылки (кроме админов).")
@@ -312,9 +321,11 @@ async def cmd_admin_broadcast(message: Message, db_session: AsyncSession):
             sent += 1
         except Exception:
             failed += 1
+        await asyncio.sleep(0.05)  # Telegram rate-limit: не более 30 msg/sec
 
+    extra = f", пропущено (opt-out): {skipped}" if skipped else ""
     await status_msg.edit_text(
-        f"✅ Рассылка завершена.\nОтправлено: {sent}, не доставлено: {failed}.",
+        f"✅ Рассылка завершена.\nОтправлено: {sent}, не доставлено: {failed}{extra}.",
         parse_mode=None,
     )
 

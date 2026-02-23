@@ -63,9 +63,13 @@ async def start_add_patient(
 @router.message(StateFilter(PatientStates.enter_full_name))
 async def process_patient_full_name(message: Message, state: FSMContext):
     """Обработка ввода ФИО"""
+    from app.utils.validators import MAX_NAME_LENGTH
     full_name = message.text.strip()
     if len(full_name) < 3:
         await message.answer("❌ ФИО должно содержать минимум 3 символа. Попробуйте еще раз:")
+        return
+    if len(full_name) > MAX_NAME_LENGTH:
+        await message.answer(f"❌ ФИО слишком длинное (максимум {MAX_NAME_LENGTH} символов). Попробуйте ещё раз:")
         return
     
     await state.update_data(full_name=full_name)
@@ -86,6 +90,10 @@ async def process_patient_phone(
     """Обработка ввода телефона (пациент создаётся у врача effective_doctor)."""
     phone = None
     if message.text and message.text.strip().lower() != "/skip":
+        from app.utils.validators import validate_phone
+        if not validate_phone(message.text.strip()):
+            await message.answer("❌ Некорректный номер телефона (минимум 10 цифр). Попробуйте снова или /skip:")
+            return
         phone = message.text.strip()
     
     data = await state.get_data()

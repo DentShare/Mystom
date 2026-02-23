@@ -2,6 +2,13 @@
 import re
 from datetime import datetime, date
 
+# Лимиты длины строк
+MAX_NAME_LENGTH = 100
+MAX_SPECIALIZATION_LENGTH = 100
+MAX_ADDRESS_LENGTH = 500
+MAX_NOTES_LENGTH = 2000
+MAX_SERVICE_NAME_LENGTH = 200
+
 
 def validate_phone(phone: str) -> bool:
     """Валидация телефона"""
@@ -40,4 +47,9 @@ def validate_price(price: str) -> bool:
         return value >= 0
     except ValueError:
         return False
+
+
+def validate_string_length(text: str, min_len: int = 1, max_len: int = 255) -> bool:
+    """Проверка длины строки в допустимых пределах."""
+    return min_len <= len(text.strip()) <= max_len
 

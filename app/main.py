@@ -10,6 +10,7 @@ from aiogram.types import ErrorEvent
 
 from app.config import Config
 from app.database.base import init_db, close_db, async_session_maker
+from app.middleware.throttle import ThrottleMiddleware
 from app.middleware.user import UserMiddleware
 from app.middleware.subscription import SubscriptionMiddleware
 
@@ -68,6 +69,8 @@ async def main():
     dp = Dispatcher(storage=MemoryStorage())
     
     # Регистрация middleware
+    dp.message.middleware(ThrottleMiddleware(rate=5, period=10))
+    dp.callback_query.middleware(ThrottleMiddleware(rate=10, period=10))
     dp.message.middleware(UserMiddleware())
     dp.callback_query.middleware(UserMiddleware())
     dp.message.middleware(SubscriptionMiddleware())

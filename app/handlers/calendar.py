@@ -511,9 +511,14 @@ async def process_appointment_discount(
     message: Message,
     user: User,
     effective_doctor: User,
+    assistant_permissions: dict,
     state: FSMContext,
     db_session: AsyncSession
 ):
+    if not can_access(assistant_permissions, FEATURE_CALENDAR, "edit"):
+        await message.answer("🚫 Недостаточно прав.")
+        await state.clear()
+        return
     """Скидка на услугу при записи через расписание (Premium): процент, сумма или /skip"""
     text = (message.text or "").strip().lower()
     if text == "/skip" or not text:
@@ -551,6 +556,12 @@ async def process_appointment_discount(
     duration_minutes = data.get("service_duration_minutes", 30)
     patient_id = data.get("patient_id")
     location_id = data.get("location_id")
+
+    if discount_amount is not None and service_price and discount_amount > service_price:
+        await message.answer(
+            f"❌ Сумма скидки ({format_money(discount_amount)}) не может превышать цену услуги ({format_money(service_price)}):"
+        )
+        return
 
     if not appointment_datetime or not patient_id:
         await message.answer("❌ Ошибка: не указаны дата или пациент. Начните запись заново.")

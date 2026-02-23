@@ -375,9 +375,14 @@ async def process_history_service_manual(
 async def process_history_comment(
     message: Message,
     effective_doctor: User,
+    assistant_permissions: dict,
     state: FSMContext,
     db_session: AsyncSession
 ):
+    if not can_access(assistant_permissions, FEATURE_HISTORY, "edit"):
+        await message.answer("🚫 Недостаточно прав для добавления записей.")
+        await state.clear()
+        return
     """Обработка комментария; для Premium с ценой — запрос скидки на услугу (данные врача)."""
     comment = message.text.strip() if message.text else ""
     if message.text and message.text.strip().lower() == "/skip":
@@ -456,9 +461,14 @@ async def _save_history_treatment(
 async def process_history_discount(
     message: Message,
     effective_doctor: User,
+    assistant_permissions: dict,
     state: FSMContext,
     db_session: AsyncSession
 ):
+    if not can_access(assistant_permissions, FEATURE_HISTORY, "edit"):
+        await message.answer("🚫 Недостаточно прав для добавления записей.")
+        await state.clear()
+        return
     """Обработка скидки на услугу (Premium, данные врача): процент, сумма или /skip"""
     text = (message.text or "").strip().lower()
     if text == "/skip" or not text:
@@ -493,6 +503,12 @@ async def process_history_discount(
     patient_id = data.get("history_patient_id")
     service_name = data.get("history_service_name")
     service_price = data.get("history_service_price")
+
+    if service_price is not None and discount_amount is not None and discount_amount > service_price:
+        await message.answer(
+            f"❌ Сумма скидки ({format_money(discount_amount)}) не может превышать цену услуги ({format_money(service_price)}):"
+        )
+        return
     comment = data.get("history_comment")
 
     stmt = select(Patient).where(
@@ -594,9 +610,14 @@ async def start_payment_flow(
 async def process_payment_whole_discount(
     message: Message,
     effective_doctor: User,
+    assistant_permissions: dict,
     state: FSMContext,
     db_session: AsyncSession
 ):
+    if not can_access(assistant_permissions, FEATURE_FINANCE, "edit"):
+        await message.answer("🚫 Недостаточно прав для внесения оплаты.")
+        await state.clear()
+        return
     """Скидка на всю работу: сумма или %, или /skip (данные врача)."""
     text = (message.text or "").strip().lower()
     whole_discount = 0.0
@@ -667,9 +688,14 @@ async def process_payment_whole_discount(
 async def process_payment_amount(
     message: Message,
     effective_doctor: User,
+    assistant_permissions: dict,
     state: FSMContext,
     db_session: AsyncSession
 ):
+    if not can_access(assistant_permissions, FEATURE_FINANCE, "edit"):
+        await message.answer("🚫 Недостаточно прав для внесения оплаты.")
+        await state.clear()
+        return
     """Внесённая сумма — проверка на превышение итога, затем выбор способа оплаты (данные врача)."""
     try:
         num_str = (message.text or "").replace(" ", "").replace(",", ".").strip()
@@ -738,9 +764,14 @@ async def process_payment_amount(
 async def process_payment_method(
     callback: CallbackQuery,
     effective_doctor: User,
+    assistant_permissions: dict,
     state: FSMContext,
     db_session: AsyncSession
 ):
+    if not can_access(assistant_permissions, FEATURE_FINANCE, "edit"):
+        await callback.answer("🚫 Недостаточно прав для внесения оплаты.", show_alert=True)
+        await state.clear()
+        return
     """Способ оплаты — распределяем сумму по позициям и сохраняем (данные врача)."""
     method_map = {"pay_method_cash": "cash", "pay_method_card": "card", "pay_method_transfer": "transfer"}
     payment_method = method_map.get(callback.data, "cash")

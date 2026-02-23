@@ -278,9 +278,14 @@ async def process_length_manual(message: Message, state: FSMContext):
 async def process_implant_notes(
     message: Message,
     effective_doctor: User,
+    assistant_permissions: dict,
     state: FSMContext,
     db_session: AsyncSession
 ):
+    if not can_access(assistant_permissions, FEATURE_IMPLANTS, "edit"):
+        await message.answer("🚫 Недостаточно прав для добавления имплантов.")
+        await state.clear()
+        return
     notes = None
     if message.text and message.text.strip().lower() != "/skip":
         notes = message.text.strip()
@@ -335,9 +340,14 @@ async def process_implant_notes(
 async def implant_add_more(
     callback: CallbackQuery,
     effective_doctor: User,
+    assistant_permissions: dict,
     state: FSMContext,
     db_session: AsyncSession
 ):
+    if not can_access(assistant_permissions, FEATURE_IMPLANTS, "edit"):
+        await callback.answer("🚫 Недостаточно прав для добавления имплантов.", show_alert=True)
+        await state.clear()
+        return
     """Добавить ещё имплант — возврат к карте зубов (данные врача)."""
     patient_id = int(callback.data.replace("implant_add_", ""))
     stmt = select(ImplantLog).where(
@@ -362,7 +372,11 @@ async def implant_add_more(
 
 
 @router.callback_query(StateFilter(ImplantStates.add_more), F.data.startswith("implant_done_"))
-async def implant_done(callback: CallbackQuery, state: FSMContext, db_session: AsyncSession):
+async def implant_done(callback: CallbackQuery, assistant_permissions: dict, state: FSMContext, db_session: AsyncSession):
+    if not can_access(assistant_permissions, FEATURE_IMPLANTS):
+        await callback.answer("🚫 Нет доступа к разделу «Импланты».", show_alert=True)
+        await state.clear()
+        return
     """Завершить планирование"""
     patient_id = int(callback.data.replace("implant_done_", ""))
     await state.clear()

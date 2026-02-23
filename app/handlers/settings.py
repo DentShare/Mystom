@@ -185,9 +185,13 @@ async def edit_timezone_start(callback: CallbackQuery, user: User, state: FSMCon
 @router.message(StateFilter(SettingsStates.enter_full_name), F.text)
 async def process_edit_full_name(message: Message, user: User, state: FSMContext, db_session):
     """Обработка нового ФИО"""
+    from app.utils.validators import MAX_NAME_LENGTH
     text = message.text.strip()
     if len(text) < 3:
         await message.answer("❌ ФИО должно содержать минимум 3 символа. Попробуйте снова:")
+        return
+    if len(text) > MAX_NAME_LENGTH:
+        await message.answer(f"❌ ФИО слишком длинное (максимум {MAX_NAME_LENGTH} символов). Попробуйте снова:")
         return
     user.full_name = text
     await db_session.commit()
@@ -200,9 +204,13 @@ async def process_edit_full_name(message: Message, user: User, state: FSMContext
 @router.message(StateFilter(SettingsStates.enter_specialization), F.text)
 async def process_edit_specialization(message: Message, user: User, state: FSMContext, db_session):
     """Обработка новой специализации"""
+    from app.utils.validators import MAX_SPECIALIZATION_LENGTH
     text = message.text.strip()
     if len(text) < 2:
         await message.answer("❌ Специализация должна содержать минимум 2 символа. Попробуйте снова:")
+        return
+    if len(text) > MAX_SPECIALIZATION_LENGTH:
+        await message.answer(f"❌ Слишком длинное значение (максимум {MAX_SPECIALIZATION_LENGTH} символов). Попробуйте снова:")
         return
     user.specialization = text
     await db_session.commit()
@@ -218,6 +226,10 @@ async def process_edit_phone(message: Message, user: User, state: FSMContext, db
     if message.text.strip().lower() == "/skip":
         user.phone = None
     else:
+        from app.utils.validators import validate_phone
+        if not validate_phone(message.text.strip()):
+            await message.answer("❌ Некорректный номер телефона (минимум 10 цифр). Попробуйте снова:")
+            return
         user.phone = message.text.strip()
     await db_session.commit()
     await state.clear()
@@ -232,7 +244,12 @@ async def process_edit_address(message: Message, user: User, state: FSMContext, 
     if message.text.strip().lower() == "/skip":
         user.address = None
     else:
-        user.address = message.text.strip()
+        from app.utils.validators import MAX_ADDRESS_LENGTH
+        text = message.text.strip()
+        if len(text) > MAX_ADDRESS_LENGTH:
+            await message.answer(f"❌ Адрес слишком длинный (максимум {MAX_ADDRESS_LENGTH} символов). Попробуйте снова:")
+            return
+        user.address = text
     await db_session.commit()
     await state.clear()
     builder = _get_settings_inline_keyboard(user)

@@ -274,17 +274,26 @@ async def price_delete_service(
 async def process_service_name(
     message: Message,
     effective_doctor: User,
+    assistant_permissions: dict,
     state: FSMContext,
     db_session: AsyncSession
 ):
+    if not can_access(assistant_permissions, FEATURE_SERVICES, "edit"):
+        await message.answer("🚫 Недостаточно прав для редактирования прайс-листа.")
+        await state.clear()
+        return
     """Обработка названия услуги (Premium)."""
     if effective_doctor.subscription_tier < 2:
         await state.clear()
         await message.answer("❌ Редактирование прайс-листа доступно в Premium")
         return
+    from app.utils.validators import MAX_SERVICE_NAME_LENGTH
     name = message.text.strip()
     if len(name) < 2:
         await message.answer("❌ Название должно быть минимум 2 символа:")
+        return
+    if len(name) > MAX_SERVICE_NAME_LENGTH:
+        await message.answer(f"❌ Название слишком длинное (максимум {MAX_SERVICE_NAME_LENGTH} символов):")
         return
 
     data = await state.get_data()
@@ -314,9 +323,14 @@ async def process_service_name(
 async def process_service_price(
     message: Message,
     effective_doctor: User,
+    assistant_permissions: dict,
     state: FSMContext,
     db_session: AsyncSession
 ):
+    if not can_access(assistant_permissions, FEATURE_SERVICES, "edit"):
+        await message.answer("🚫 Недостаточно прав для редактирования прайс-листа.")
+        await state.clear()
+        return
     """Обработка цены услуги (Premium)."""
     if effective_doctor.subscription_tier < 2:
         await state.clear()
@@ -358,9 +372,14 @@ async def process_service_price(
 async def process_service_duration(
     message: Message,
     effective_doctor: User,
+    assistant_permissions: dict,
     state: FSMContext,
     db_session: AsyncSession
 ):
+    if not can_access(assistant_permissions, FEATURE_SERVICES, "edit"):
+        await message.answer("🚫 Недостаточно прав для редактирования прайс-листа.")
+        await state.clear()
+        return
     """Обработка длительности услуги (Standard+: edit, Premium: add)."""
     if effective_doctor.subscription_tier < 1:
         await state.clear()
