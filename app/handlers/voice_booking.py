@@ -214,6 +214,7 @@ async def _search_patient_and_continue(
                 btn_text = p.full_name[:57] + "..."
             builder.button(text=btn_text, callback_data=f"vb_patient_{p.id}")
         builder.button(text="➕ Создать нового", callback_data="vb_create_patient")
+        builder.button(text="✏️ Изменить имя", callback_data="vb_rename_patient")
         builder.button(text="❌ Отмена", callback_data="vb_cancel")
         builder.adjust(1)
 
@@ -225,9 +226,10 @@ async def _search_patient_and_continue(
         await state.set_state(VoiceBookingStates.choosing_patient)
         return
 
-    # Не найден — предлагаем создать
+    # Не найден — предлагаем создать или изменить имя
     builder = InlineKeyboardBuilder()
     builder.button(text=f"➕ Создать «{patient_name}»", callback_data="vb_create_patient")
+    builder.button(text="✏️ Изменить имя", callback_data="vb_rename_patient")
     builder.button(text="❌ Отмена", callback_data="vb_cancel")
     builder.adjust(1)
 
@@ -419,6 +421,17 @@ async def cb_create_patient(
         "📞 Введите номер телефона для связи (или /skip):"
     )
     await state.set_state(VoiceBookingStates.entering_patient_phone)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "vb_rename_patient")
+async def cb_rename_patient(callback: CallbackQuery, state: FSMContext):
+    """Изменить имя пациента (если распознано неправильно)."""
+    await callback.message.edit_text(
+        "✏️ Введите правильное ФИО пациента:"
+    )
+    await state.update_data(vb_manual_name_input=True)
+    await state.set_state(VoiceBookingStates.choosing_patient)
     await callback.answer()
 
 
@@ -803,6 +816,7 @@ async def _show_confirmation(message: Message, state: FSMContext):
 
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Подтвердить", callback_data="vb_confirm")
+    builder.button(text="✏️ Изменить пациента", callback_data="vb_edit_patient")
     builder.button(text="✏️ Изменить дату", callback_data="vb_edit_date")
     builder.button(text="✏️ Изменить время", callback_data="vb_edit_time")
     builder.button(text="✏️ Изменить услугу", callback_data="vb_edit_service")
@@ -891,6 +905,17 @@ async def cb_confirm_booking(
 
 
 # ── 13. Редактирование из подтверждения ────────────────────────────────
+
+@router.callback_query(StateFilter(VoiceBookingStates.confirming), F.data == "vb_edit_patient")
+async def cb_edit_patient(callback: CallbackQuery, state: FSMContext):
+    """Изменить пациента — ввод нового имени для поиска."""
+    await callback.message.edit_text(
+        "👤 Введите ФИО пациента для поиска (или новое имя):"
+    )
+    await state.update_data(vb_manual_name_input=True, vb_patient_id=None, vb_patient_full_name=None)
+    await state.set_state(VoiceBookingStates.choosing_patient)
+    await callback.answer()
+
 
 @router.callback_query(StateFilter(VoiceBookingStates.confirming), F.data == "vb_edit_date")
 async def cb_edit_date(callback: CallbackQuery, state: FSMContext):

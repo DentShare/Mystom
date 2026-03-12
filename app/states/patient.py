@@ -8,4 +8,9 @@ class PatientStates(StatesGroup):
     enter_birth_date = State()
     enter_notes = State()
     search_patient = State()  # Поиск пациента
+    # Редактирование пациента
+    edit_full_name = State()
+    edit_phone = State()
+    edit_birth_date = State()
+    edit_notes = State()
 

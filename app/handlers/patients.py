@@ -263,6 +263,7 @@ async def _show_patient_info(message: Message, patient: Patient, edit: bool = Fa
     text_parts.append(f"📅 Создан: {patient.created_at.strftime('%d.%m.%Y %H:%M')}")
     
     builder = InlineKeyboardBuilder()
+    builder.button(text="✏️ Редактировать", callback_data=f"patient_edit_{patient.id}")
     builder.button(text="📋 История болезни", callback_data=f"patient_history_{patient.id}")
     builder.button(text="🔩 Добавить имплант", callback_data=f"implant_add_{patient.id}")
     builder.button(text="📄 Карта имплантации", callback_data=f"implant_card_{patient.id}")
@@ -274,4 +275,317 @@ async def _show_patient_info(message: Message, patient: Patient, edit: bool = Fa
         await message.edit_text(text, reply_markup=builder.as_markup())
     else:
         await message.answer(text, reply_markup=builder.as_markup())
+
+
+# ── Редактирование пациента ──────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("patient_edit_"))
+async def start_edit_patient(
+    callback: CallbackQuery,
+    effective_doctor: User,
+    assistant_permissions: dict,
+    db_session: AsyncSession,
+):
+    """Показать меню редактирования пациента."""
+    if not can_access(assistant_permissions, FEATURE_PATIENTS, "edit"):
+        await callback.answer("Нет права на редактирование пациентов.", show_alert=True)
+        return
+
+    patient_id = int(callback.data.replace("patient_edit_", ""))
+    patient = await get_patient_by_id(db_session, patient_id, effective_doctor.id)
+    if not patient:
+        await callback.answer("❌ Пациент не найден", show_alert=True)
+        return
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text=f"👤 ФИО: {patient.full_name}", callback_data=f"pedit_name_{patient.id}")
+    builder.button(
+        text=f"📞 Телефон: {patient.phone or 'не указан'}",
+        callback_data=f"pedit_phone_{patient.id}",
+    )
+    builder.button(
+        text=f"🎂 Дата рождения: {patient.birth_date.strftime('%d.%m.%Y') if patient.birth_date else 'не указана'}",
+        callback_data=f"pedit_bdate_{patient.id}",
+    )
+    builder.button(
+        text=f"📝 Заметки: {(patient.notes[:30] + '...') if patient.notes and len(patient.notes) > 30 else (patient.notes or 'нет')}",
+        callback_data=f"pedit_notes_{patient.id}",
+    )
+    builder.button(text="← Назад", callback_data=f"patient_view_{patient.id}")
+    builder.adjust(1)
+
+    await callback.message.edit_text(
+        f"✏️ **Редактирование пациента**\n\n"
+        f"Выберите поле для изменения:",
+        reply_markup=builder.as_markup(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("pedit_name_"))
+async def edit_patient_name_start(
+    callback: CallbackQuery,
+    effective_doctor: User,
+    assistant_permissions: dict,
+    state: FSMContext,
+    db_session: AsyncSession,
+):
+    """Начало редактирования ФИО."""
+    if not can_access(assistant_permissions, FEATURE_PATIENTS, "edit"):
+        await callback.answer("Нет права на редактирование.", show_alert=True)
+        return
+    patient_id = int(callback.data.replace("pedit_name_", ""))
+    patient = await get_patient_by_id(db_session, patient_id, effective_doctor.id)
+    if not patient:
+        await callback.answer("❌ Пациент не найден", show_alert=True)
+        return
+
+    await state.update_data(editing_patient_id=patient_id)
+    await state.set_state(PatientStates.edit_full_name)
+    await callback.message.edit_text(
+        f"👤 Текущее ФИО: **{patient.full_name}**\n\n"
+        "Введите новое ФИО:"
+    )
+    await callback.answer()
+
+
+@router.message(StateFilter(PatientStates.edit_full_name))
+async def process_edit_name(
+    message: Message,
+    effective_doctor: User,
+    state: FSMContext,
+    db_session: AsyncSession,
+):
+    """Обработка нового ФИО."""
+    from app.utils.validators import MAX_NAME_LENGTH
+    name = (message.text or "").strip()
+    if len(name) < 3:
+        await message.answer("❌ ФИО должно содержать минимум 3 символа. Попробуйте ещё раз:")
+        return
+    if len(name) > MAX_NAME_LENGTH:
+        await message.answer(f"❌ ФИО слишком длинное (максимум {MAX_NAME_LENGTH} символов).")
+        return
+
+    data = await state.get_data()
+    patient_id = data.get("editing_patient_id")
+    patient = await get_patient_by_id(db_session, patient_id, effective_doctor.id)
+    if not patient:
+        await message.answer("❌ Пациент не найден.")
+        await state.clear()
+        return
+
+    patient.full_name = name
+    await db_session.commit()
+    await state.clear()
+    await message.answer(f"✅ ФИО изменено на **{name}**.")
+    await _show_patient_info(message, patient)
+
+
+@router.callback_query(F.data.startswith("pedit_phone_"))
+async def edit_patient_phone_start(
+    callback: CallbackQuery,
+    effective_doctor: User,
+    assistant_permissions: dict,
+    state: FSMContext,
+    db_session: AsyncSession,
+):
+    """Начало редактирования телефона."""
+    if not can_access(assistant_permissions, FEATURE_PATIENTS, "edit"):
+        await callback.answer("Нет права на редактирование.", show_alert=True)
+        return
+    patient_id = int(callback.data.replace("pedit_phone_", ""))
+    patient = await get_patient_by_id(db_session, patient_id, effective_doctor.id)
+    if not patient:
+        await callback.answer("❌ Пациент не найден", show_alert=True)
+        return
+
+    await state.update_data(editing_patient_id=patient_id)
+    await state.set_state(PatientStates.edit_phone)
+    current = patient.phone or "не указан"
+    await callback.message.edit_text(
+        f"📞 Текущий телефон: **{current}**\n\n"
+        "Введите новый номер телефона (или /clear чтобы удалить):"
+    )
+    await callback.answer()
+
+
+@router.message(StateFilter(PatientStates.edit_phone))
+async def process_edit_phone(
+    message: Message,
+    effective_doctor: User,
+    state: FSMContext,
+    db_session: AsyncSession,
+):
+    """Обработка нового телефона."""
+    text = (message.text or "").strip()
+
+    data = await state.get_data()
+    patient_id = data.get("editing_patient_id")
+    patient = await get_patient_by_id(db_session, patient_id, effective_doctor.id)
+    if not patient:
+        await message.answer("❌ Пациент не найден.")
+        await state.clear()
+        return
+
+    if text.lower() == "/clear":
+        patient.phone = None
+        await db_session.commit()
+        await state.clear()
+        await message.answer("✅ Телефон удалён.")
+        await _show_patient_info(message, patient)
+        return
+
+    from app.utils.validators import validate_phone
+    if not validate_phone(text):
+        await message.answer("❌ Некорректный номер (минимум 10 цифр). Попробуйте ещё раз или /clear:")
+        return
+
+    patient.phone = text
+    await db_session.commit()
+    await state.clear()
+    await message.answer(f"✅ Телефон изменён на **{text}**.")
+    await _show_patient_info(message, patient)
+
+
+@router.callback_query(F.data.startswith("pedit_bdate_"))
+async def edit_patient_bdate_start(
+    callback: CallbackQuery,
+    effective_doctor: User,
+    assistant_permissions: dict,
+    state: FSMContext,
+    db_session: AsyncSession,
+):
+    """Начало редактирования даты рождения."""
+    if not can_access(assistant_permissions, FEATURE_PATIENTS, "edit"):
+        await callback.answer("Нет права на редактирование.", show_alert=True)
+        return
+    patient_id = int(callback.data.replace("pedit_bdate_", ""))
+    patient = await get_patient_by_id(db_session, patient_id, effective_doctor.id)
+    if not patient:
+        await callback.answer("❌ Пациент не найден", show_alert=True)
+        return
+
+    await state.update_data(editing_patient_id=patient_id)
+    await state.set_state(PatientStates.edit_birth_date)
+    current = patient.birth_date.strftime('%d.%m.%Y') if patient.birth_date else "не указана"
+    await callback.message.edit_text(
+        f"🎂 Текущая дата рождения: **{current}**\n\n"
+        "Введите новую дату (ДД.ММ.ГГГГ, например: 15.03.1990) или /clear:"
+    )
+    await callback.answer()
+
+
+@router.message(StateFilter(PatientStates.edit_birth_date))
+async def process_edit_bdate(
+    message: Message,
+    effective_doctor: User,
+    state: FSMContext,
+    db_session: AsyncSession,
+):
+    """Обработка новой даты рождения."""
+    text = (message.text or "").strip()
+
+    data = await state.get_data()
+    patient_id = data.get("editing_patient_id")
+    patient = await get_patient_by_id(db_session, patient_id, effective_doctor.id)
+    if not patient:
+        await message.answer("❌ Пациент не найден.")
+        await state.clear()
+        return
+
+    if text.lower() == "/clear":
+        patient.birth_date = None
+        await db_session.commit()
+        await state.clear()
+        await message.answer("✅ Дата рождения удалена.")
+        await _show_patient_info(message, patient)
+        return
+
+    parsed_date = None
+    for fmt in ("%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d"):
+        try:
+            parsed_date = datetime.strptime(text, fmt).date()
+            break
+        except ValueError:
+            continue
+
+    if not parsed_date:
+        await message.answer("❌ Неверный формат. Введите дату как ДД.ММ.ГГГГ (например: 15.03.1990):")
+        return
+
+    if parsed_date > date.today():
+        await message.answer("❌ Дата рождения не может быть в будущем.")
+        return
+
+    patient.birth_date = parsed_date
+    await db_session.commit()
+    await state.clear()
+    await message.answer(f"✅ Дата рождения изменена на **{parsed_date.strftime('%d.%m.%Y')}**.")
+    await _show_patient_info(message, patient)
+
+
+@router.callback_query(F.data.startswith("pedit_notes_"))
+async def edit_patient_notes_start(
+    callback: CallbackQuery,
+    effective_doctor: User,
+    assistant_permissions: dict,
+    state: FSMContext,
+    db_session: AsyncSession,
+):
+    """Начало редактирования заметок."""
+    if not can_access(assistant_permissions, FEATURE_PATIENTS, "edit"):
+        await callback.answer("Нет права на редактирование.", show_alert=True)
+        return
+    patient_id = int(callback.data.replace("pedit_notes_", ""))
+    patient = await get_patient_by_id(db_session, patient_id, effective_doctor.id)
+    if not patient:
+        await callback.answer("❌ Пациент не найден", show_alert=True)
+        return
+
+    await state.update_data(editing_patient_id=patient_id)
+    await state.set_state(PatientStates.edit_notes)
+    current = patient.notes or "нет"
+    await callback.message.edit_text(
+        f"📝 Текущие заметки:\n{current}\n\n"
+        "Введите новые заметки (или /clear чтобы удалить):"
+    )
+    await callback.answer()
+
+
+@router.message(StateFilter(PatientStates.edit_notes))
+async def process_edit_notes(
+    message: Message,
+    effective_doctor: User,
+    state: FSMContext,
+    db_session: AsyncSession,
+):
+    """Обработка новых заметок."""
+    from app.utils.validators import MAX_NOTES_LENGTH
+    text = (message.text or "").strip()
+
+    data = await state.get_data()
+    patient_id = data.get("editing_patient_id")
+    patient = await get_patient_by_id(db_session, patient_id, effective_doctor.id)
+    if not patient:
+        await message.answer("❌ Пациент не найден.")
+        await state.clear()
+        return
+
+    if text.lower() == "/clear":
+        patient.notes = None
+        await db_session.commit()
+        await state.clear()
+        await message.answer("✅ Заметки удалены.")
+        await _show_patient_info(message, patient)
+        return
+
+    if len(text) > MAX_NOTES_LENGTH:
+        await message.answer(f"❌ Заметки слишком длинные (максимум {MAX_NOTES_LENGTH} символов).")
+        return
+
+    patient.notes = text
+    await db_session.commit()
+    await state.clear()
+    await message.answer("✅ Заметки обновлены.")
+    await _show_patient_info(message, patient)
 
