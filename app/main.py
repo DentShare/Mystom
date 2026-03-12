@@ -15,7 +15,7 @@ from app.middleware.user import UserMiddleware
 from app.middleware.subscription import SubscriptionMiddleware
 
 # Импорты роутеров
-from app.handlers import start, menu, settings, business_card, calendar, patients, history, implant, finance, services, admin, export, subscription, team, fallback
+from app.handlers import start, menu, settings, business_card, calendar, patients, history, implant, finance, services, admin, export, subscription, team, voice_booking, fallback
 from app.services.reminder_service import (
     get_appointments_due_for_reminder,
     format_reminder_message,
@@ -91,6 +91,7 @@ async def main():
     dp.include_router(subscription.router)
     dp.include_router(team.router)
     dp.include_router(admin.router)
+    dp.include_router(voice_booking.router)  # голос/фото запись (до fallback!)
     dp.include_router(fallback.router)  # последним — ловит всё необработанное
 
     @dp.error()

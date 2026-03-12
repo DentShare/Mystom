@@ -10,6 +10,8 @@ timezonefinder==6.2.0
 pytz==2024.1
 aiofiles==23.2.1
 jinja2==3.1.2
+# AI: голосовое распознавание (Whisper) и парсинг (GPT)
+openai>=1.30.0
 # для веб-админки (admin_webapp) при деплое из одного образа
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0

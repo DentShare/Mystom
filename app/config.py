@@ -26,6 +26,9 @@ class Config:
     # URL Web App админки (если задан — в /admin показывается кнопка)
     ADMIN_WEBAPP_URL: str = os.getenv("ADMIN_WEBAPP_URL", "").strip()
     
+    # OpenAI (для распознавания голоса и скриншотов)
+    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "").strip()
+
     # Timezone (опционально)
     TIMEZONE_API_KEY: str = os.getenv("TIMEZONE_API_KEY", "")
 
