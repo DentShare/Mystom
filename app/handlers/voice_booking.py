@@ -12,18 +12,26 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, and_
 
 from app.config import Config
-from app.database.models import User, Patient, Appointment, Treatment
+from app.database.models import User, Patient, Appointment, Treatment, Service
 from app.states.voice_booking import VoiceBookingStates
 from app.services.patient_service import search_patients
 from app.services.notification_service import notify_new_appointment
+from app.services.service_service import (
+    ensure_default_services,
+    get_categories,
+    get_services_by_category,
+    CATEGORIES,
+)
 from app.services.ai_service import (
     transcribe_voice,
     parse_image_for_booking,
     parse_booking_text,
     ParsedBooking,
 )
+from app.utils.formatters import format_money
 
 router = Router(name="voice_booking")
 logger = logging.getLogger(__name__)
@@ -138,7 +146,7 @@ async def _process_parsed_booking(
         vb_patient_name=parsed.patient_name,
         vb_date=parsed.date_str,
         vb_time=parsed.time_str,
-        vb_service=parsed.service,
+        vb_service_text=parsed.service,  # текст из распознавания (для поиска)
         vb_raw_text=parsed.raw_text,
     )
 
@@ -191,9 +199,9 @@ async def _search_patient_and_continue(
     patients = await search_patients(db_session, effective_doctor.id, patient_name)
 
     if len(patients) == 1:
-        # Один пациент — сразу к подтверждению
+        # Один пациент — продолжаем
         await state.update_data(vb_patient_id=patients[0].id, vb_patient_full_name=patients[0].full_name)
-        await _show_confirmation(status_msg, state)
+        await _check_remaining_fields(status_msg, effective_doctor, state, db_session)
         return
 
     if len(patients) > 1:
@@ -231,7 +239,150 @@ async def _search_patient_and_continue(
     await state.set_state(VoiceBookingStates.choosing_patient)
 
 
-# ── 4. Выбор пациента (callback) ──────────────────────────────────────
+async def _check_remaining_fields(
+    message: Message,
+    effective_doctor: User,
+    state: FSMContext,
+    db_session: AsyncSession,
+):
+    """Проверить что все поля заполнены, иначе запросить недостающие."""
+    data = await state.get_data()
+
+    if not data.get("vb_date"):
+        try:
+            await message.edit_text("📅 Введите дату приёма (например: 15.03, завтра, понедельник):")
+        except Exception:
+            await message.answer("📅 Введите дату приёма (например: 15.03, завтра, понедельник):")
+        await state.set_state(VoiceBookingStates.entering_date)
+        return
+
+    if not data.get("vb_time"):
+        try:
+            await message.edit_text("⏰ Введите время приёма (например: 14:30):")
+        except Exception:
+            await message.answer("⏰ Введите время приёма (например: 14:30):")
+        await state.set_state(VoiceBookingStates.entering_time)
+        return
+
+    # Услуга: если ещё не выбрана из прайса — матчим
+    if not data.get("vb_service_id"):
+        await _match_service_and_continue(message, effective_doctor, state, db_session)
+        return
+
+    await _show_confirmation(message, state)
+
+
+# ── 4. Поиск услуги в прайсе врача ────────────────────────────────────
+
+async def _search_services_by_text(
+    db_session: AsyncSession,
+    doctor_id: int,
+    query: str,
+) -> list[Service]:
+    """Поиск услуг врача по подстроке в названии."""
+    pattern = f"%{query}%"
+    stmt = (
+        select(Service)
+        .where(
+            and_(
+                Service.doctor_id == doctor_id,
+                Service.name.ilike(pattern),
+            )
+        )
+        .order_by(Service.category, Service.sort_order)
+    )
+    result = await db_session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def _match_service_and_continue(
+    message: Message,
+    effective_doctor: User,
+    state: FSMContext,
+    db_session: AsyncSession,
+):
+    """Сопоставить распознанную услугу с прайсом врача."""
+    data = await state.get_data()
+    service_text = data.get("vb_service_text")  # из распознавания
+
+    await ensure_default_services(db_session, effective_doctor.id)
+
+    if service_text:
+        # Ищем по подстроке
+        matches = await _search_services_by_text(db_session, effective_doctor.id, service_text)
+
+        if len(matches) == 1:
+            # Точное совпадение — автовыбор
+            svc = matches[0]
+            await state.update_data(
+                vb_service_id=svc.id,
+                vb_service=svc.name,
+                vb_service_price=svc.price,
+                vb_service_duration=svc.duration_minutes,
+            )
+            await _show_confirmation(message, state)
+            return
+
+        if len(matches) > 1:
+            # Несколько — показываем кнопки
+            builder = InlineKeyboardBuilder()
+            for svc in matches[:15]:
+                text = f"{svc.name} — {format_money(svc.price)}"
+                if len(text) > 60:
+                    text = svc.name[:50] + "..."
+                builder.button(text=text, callback_data=f"vb_svc_{svc.id}")
+            builder.button(text="📝 Ввести вручную", callback_data="vb_svc_manual")
+            builder.button(text="❌ Отмена", callback_data="vb_cancel")
+            builder.adjust(1)
+
+            try:
+                await message.edit_text(
+                    f"🔍 По запросу «{service_text}» найдено {len(matches)} услуг.\n"
+                    "Выберите нужную:",
+                    reply_markup=builder.as_markup(),
+                )
+            except Exception:
+                await message.answer(
+                    f"🔍 По запросу «{service_text}» найдено {len(matches)} услуг.\n"
+                    "Выберите нужную:",
+                    reply_markup=builder.as_markup(),
+                )
+            await state.set_state(VoiceBookingStates.choosing_service)
+            return
+
+    # Не найдено или не указано — показываем категории + все услуги
+    await _show_service_picker(message, effective_doctor, state, db_session, service_text)
+
+
+async def _show_service_picker(
+    message: Message,
+    effective_doctor: User,
+    state: FSMContext,
+    db_session: AsyncSession,
+    hint: str | None = None,
+):
+    """Показать категории услуг для выбора."""
+    categories = await get_categories()
+
+    builder = InlineKeyboardBuilder()
+    for cat_id, name, emoji in categories:
+        builder.button(text=f"{emoji} {name}", callback_data=f"vb_cat_{cat_id}")
+    builder.button(text="📝 Ввести вручную", callback_data="vb_svc_manual")
+    builder.button(text="⏩ Без услуги", callback_data="vb_svc_skip")
+    builder.button(text="❌ Отмена", callback_data="vb_cancel")
+    builder.adjust(2, 2, 2, 1, 1, 1)
+
+    hint_line = f"\n(распознано: «{hint}» — не найдено в прайсе)" if hint else ""
+    text = f"📋 Выберите категорию услуги:{hint_line}"
+
+    try:
+        await message.edit_text(text, reply_markup=builder.as_markup())
+    except Exception:
+        await message.answer(text, reply_markup=builder.as_markup())
+    await state.set_state(VoiceBookingStates.choosing_service)
+
+
+# ── 5. Выбор пациента (callback) ──────────────────────────────────────
 
 @router.callback_query(F.data.startswith("vb_patient_"))
 async def cb_select_patient(
@@ -251,18 +402,7 @@ async def cb_select_patient(
     await state.update_data(vb_patient_id=patient.id, vb_patient_full_name=patient.full_name)
     await callback.answer()
 
-    # Проверяем, есть ли дата/время
-    data = await state.get_data()
-    if not data.get("vb_date"):
-        await callback.message.edit_text("📅 Введите дату приёма (например: 15.03, завтра, понедельник):")
-        await state.set_state(VoiceBookingStates.entering_date)
-        return
-    if not data.get("vb_time"):
-        await callback.message.edit_text("⏰ Введите время приёма (например: 14:30):")
-        await state.set_state(VoiceBookingStates.entering_time)
-        return
-
-    await _show_confirmation(callback.message, state)
+    await _check_remaining_fields(callback.message, effective_doctor, state, db_session)
 
 
 @router.callback_query(F.data == "vb_create_patient")
@@ -290,7 +430,93 @@ async def cb_cancel(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-# ── 5. Ввод телефона нового пациента ───────────────────────────────────
+# ── 6. Выбор услуги (callbacks) ────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("vb_svc_"))
+async def cb_select_service(
+    callback: CallbackQuery,
+    effective_doctor: User,
+    state: FSMContext,
+    db_session: AsyncSession,
+):
+    """Услуга выбрана из прайса."""
+    data_str = callback.data
+
+    if data_str == "vb_svc_manual":
+        await callback.message.edit_text("📝 Введите название услуги:")
+        await state.set_state(VoiceBookingStates.choosing_service)
+        await state.update_data(vb_manual_service_input=True)
+        await callback.answer()
+        return
+
+    if data_str == "vb_svc_skip":
+        await state.update_data(vb_service_id=None, vb_service=None, vb_service_price=None, vb_service_duration=30)
+        await callback.answer()
+        await _show_confirmation(callback.message, state)
+        return
+
+    # vb_svc_{id}
+    service_id = int(data_str.replace("vb_svc_", ""))
+    stmt = select(Service).where(and_(Service.id == service_id, Service.doctor_id == effective_doctor.id))
+    result = await db_session.execute(stmt)
+    svc = result.scalar_one_or_none()
+
+    if not svc:
+        await callback.answer("❌ Услуга не найдена", show_alert=True)
+        return
+
+    await state.update_data(
+        vb_service_id=svc.id,
+        vb_service=svc.name,
+        vb_service_price=svc.price,
+        vb_service_duration=svc.duration_minutes,
+    )
+    await callback.answer()
+    await _show_confirmation(callback.message, state)
+
+
+@router.callback_query(F.data.startswith("vb_cat_"))
+async def cb_select_category(
+    callback: CallbackQuery,
+    effective_doctor: User,
+    state: FSMContext,
+    db_session: AsyncSession,
+):
+    """Выбрана категория — показываем услуги."""
+    category = callback.data.replace("vb_cat_", "")
+    services = await get_services_by_category(db_session, effective_doctor.id, category)
+    cat_name, cat_emoji = CATEGORIES.get(category, ("", ""))
+
+    builder = InlineKeyboardBuilder()
+    for svc in services:
+        text = f"{svc.name} — {format_money(svc.price)}"
+        if len(text) > 60:
+            text = svc.name[:50] + "..."
+        builder.button(text=text, callback_data=f"vb_svc_{svc.id}")
+    builder.button(text="← Назад к категориям", callback_data="vb_cat_back")
+    builder.button(text="📝 Ввести вручную", callback_data="vb_svc_manual")
+    builder.adjust(1)
+
+    await callback.message.edit_text(
+        f"{cat_emoji} **{cat_name}**\n\nВыберите услугу:",
+        reply_markup=builder.as_markup(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "vb_cat_back")
+async def cb_category_back(
+    callback: CallbackQuery,
+    effective_doctor: User,
+    state: FSMContext,
+    db_session: AsyncSession,
+):
+    """Назад к списку категорий."""
+    await _show_service_picker(callback.message, effective_doctor, state, db_session)
+    await callback.answer()
+
+
+# ── 7. Ввод телефона нового пациента ───────────────────────────────────
 
 @router.message(StateFilter(VoiceBookingStates.entering_patient_phone))
 async def handle_patient_phone(
@@ -325,20 +551,10 @@ async def handle_patient_phone(
     await state.update_data(vb_patient_id=patient.id, vb_patient_full_name=patient.full_name)
     await message.answer(f"✅ Пациент **{patient.full_name}** создан (ID: {patient.id}).")
 
-    # Проверяем дату/время
-    if not data.get("vb_date"):
-        await message.answer("📅 Введите дату приёма (например: 15.03, завтра, понедельник):")
-        await state.set_state(VoiceBookingStates.entering_date)
-        return
-    if not data.get("vb_time"):
-        await message.answer("⏰ Введите время приёма (например: 14:30):")
-        await state.set_state(VoiceBookingStates.entering_time)
-        return
-
-    await _show_confirmation(message, state)
+    await _check_remaining_fields(message, effective_doctor, state, db_session)
 
 
-# ── 6. Ручной ввод даты ───────────────────────────────────────────────
+# ── 8. Ручной ввод даты ───────────────────────────────────────────────
 
 @router.message(StateFilter(VoiceBookingStates.entering_date))
 async def handle_date_input(
@@ -403,20 +619,17 @@ async def handle_date_input(
         await _search_patient_and_continue(message, effective_doctor, state, db_session, status_msg)
         return
 
-    if not data.get("vb_time"):
-        await message.answer("⏰ Введите время приёма (например: 14:30):")
-        await state.set_state(VoiceBookingStates.entering_time)
-        return
-
-    await _show_confirmation(message, state)
+    await _check_remaining_fields(message, effective_doctor, state, db_session)
 
 
-# ── 7. Ручной ввод времени ─────────────────────────────────────────────
+# ── 9. Ручной ввод времени ─────────────────────────────────────────────
 
 @router.message(StateFilter(VoiceBookingStates.entering_time))
 async def handle_time_input(
     message: Message,
+    effective_doctor: User,
     state: FSMContext,
+    db_session: AsyncSession,
 ):
     """Ручной ввод времени."""
     text = (message.text or "").strip()
@@ -444,35 +657,92 @@ async def handle_time_input(
         return
 
     await state.update_data(vb_time=parsed_time)
-
-    data = await state.get_data()
-    if not data.get("vb_service"):
-        await message.answer(
-            "🏥 Какая услуга? Введите текстом (например: лечение кариеса, консультация, удаление) или /skip:"
-        )
-        await state.set_state(VoiceBookingStates.choosing_service)
-        return
-
-    await _show_confirmation(message, state)
+    await _check_remaining_fields(message, effective_doctor, state, db_session)
 
 
-# ── 8. Ввод услуги ────────────────────────────────────────────────────
+# ── 10. Ручной ввод услуги (текстом) ──────────────────────────────────
 
 @router.message(StateFilter(VoiceBookingStates.choosing_service))
 async def handle_service_input(
     message: Message,
+    effective_doctor: User,
     state: FSMContext,
+    db_session: AsyncSession,
 ):
-    """Ручной ввод услуги."""
-    text = (message.text or "").strip()
-    if text.lower() == "/skip":
-        text = None
+    """Ручной ввод услуги — сначала ищем в прайсе, потом сохраняем как текст."""
+    data = await state.get_data()
+    if not data.get("vb_manual_service_input"):
+        return  # Ожидаем callback
 
-    await state.update_data(vb_service=text)
+    text = (message.text or "").strip()
+    if not text:
+        await message.answer("❌ Введите название услуги:")
+        return
+
+    # Ищем в прайсе по введённому тексту
+    matches = await _search_services_by_text(db_session, effective_doctor.id, text)
+
+    if len(matches) == 1:
+        svc = matches[0]
+        await state.update_data(
+            vb_service_id=svc.id,
+            vb_service=svc.name,
+            vb_service_price=svc.price,
+            vb_service_duration=svc.duration_minutes,
+            vb_manual_service_input=False,
+        )
+        await _show_confirmation(message, state)
+        return
+
+    if len(matches) > 1:
+        builder = InlineKeyboardBuilder()
+        for svc in matches[:15]:
+            btn = f"{svc.name} — {format_money(svc.price)}"
+            if len(btn) > 60:
+                btn = svc.name[:50] + "..."
+            builder.button(text=btn, callback_data=f"vb_svc_{svc.id}")
+        builder.button(text=f"📝 Сохранить как «{text[:30]}»", callback_data="vb_svc_custom")
+        builder.adjust(1)
+
+        await state.update_data(vb_custom_service_text=text)
+        await message.answer(
+            f"🔍 По запросу «{text}» найдено {len(matches)} услуг.\n"
+            "Выберите или сохраните введённый текст:",
+            reply_markup=builder.as_markup(),
+        )
+        return
+
+    # Не найдено — сохраняем как текст
+    await state.update_data(
+        vb_service_id=None,
+        vb_service=text,
+        vb_service_price=None,
+        vb_service_duration=30,
+        vb_manual_service_input=False,
+    )
     await _show_confirmation(message, state)
 
 
-# ── 9. Ручной ввод имени пациента (choosing_patient + manual) ──────────
+@router.callback_query(F.data == "vb_svc_custom")
+async def cb_save_custom_service(
+    callback: CallbackQuery,
+    state: FSMContext,
+):
+    """Сохранить услугу как произвольный текст."""
+    data = await state.get_data()
+    text = data.get("vb_custom_service_text", "")
+    await state.update_data(
+        vb_service_id=None,
+        vb_service=text,
+        vb_service_price=None,
+        vb_service_duration=30,
+        vb_manual_service_input=False,
+    )
+    await callback.answer()
+    await _show_confirmation(callback.message, state)
+
+
+# ── 11. Ручной ввод имени пациента (choosing_patient + manual) ─────────
 
 @router.message(StateFilter(VoiceBookingStates.choosing_patient))
 async def handle_manual_patient_name(
@@ -497,7 +767,7 @@ async def handle_manual_patient_name(
     await _search_patient_and_continue(message, effective_doctor, state, db_session, status_msg)
 
 
-# ── 10. Подтверждение записи ───────────────────────────────────────────
+# ── 12. Подтверждение записи ──────────────────────────────────────────
 
 async def _show_confirmation(message: Message, state: FSMContext):
     """Показать сводку и кнопки подтверждения."""
@@ -506,7 +776,8 @@ async def _show_confirmation(message: Message, state: FSMContext):
     patient_name = data.get("vb_patient_full_name") or data.get("vb_patient_name", "—")
     date_str = data.get("vb_date", "—")
     time_str = data.get("vb_time", "—")
-    service = data.get("vb_service") or "Не указана"
+    service_name = data.get("vb_service") or "Не указана"
+    service_price = data.get("vb_service_price")
 
     # Форматируем дату
     display_date = date_str
@@ -517,12 +788,16 @@ async def _show_confirmation(message: Message, state: FSMContext):
     except (ValueError, TypeError):
         pass
 
+    service_line = f"**{service_name}**"
+    if service_price:
+        service_line += f" — {format_money(service_price)}"
+
     text = (
         "📋 **Подтверждение записи**\n\n"
         f"👤 Пациент: **{patient_name}**\n"
         f"📅 Дата: **{display_date}**\n"
         f"⏰ Время: **{time_str}**\n"
-        f"🏥 Услуга: **{service}**\n\n"
+        f"🏥 Услуга: {service_line}\n\n"
         "Всё верно?"
     )
 
@@ -554,7 +829,10 @@ async def cb_confirm_booking(
     patient_id = data.get("vb_patient_id")
     date_str = data.get("vb_date")
     time_str = data.get("vb_time")
-    service_text = data.get("vb_service")
+    service_name = data.get("vb_service")
+    service_id = data.get("vb_service_id")
+    service_price = data.get("vb_service_price")
+    duration = data.get("vb_service_duration") or 30
 
     if not patient_id or not date_str or not time_str:
         await callback.answer("❌ Недостаточно данных", show_alert=True)
@@ -571,22 +849,24 @@ async def cb_confirm_booking(
     appointment = Appointment(
         doctor_id=effective_doctor.id,
         patient_id=patient_id,
+        service_id=service_id,
         date_time=appointment_dt,
-        duration_minutes=30,
-        service_description=service_text,
+        duration_minutes=duration,
+        service_description=service_name,
         status="planned",
     )
     db_session.add(appointment)
     await db_session.commit()
     await db_session.refresh(appointment)
 
-    # Создаём Treatment если есть услуга
-    if service_text:
+    # Создаём Treatment
+    if service_name or service_id:
         treatment = Treatment(
             patient_id=patient_id,
             doctor_id=effective_doctor.id,
             appointment_id=appointment.id,
-            service_name=service_text,
+            service_name=service_name,
+            price=service_price,
         )
         db_session.add(treatment)
         await db_session.commit()
@@ -597,18 +877,20 @@ async def cb_confirm_booking(
     days_ru = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
     display_date = f"{d.strftime('%d.%m.%Y')} ({days_ru[d.weekday()]})"
 
+    price_str = f" — {format_money(service_price)}" if service_price else ""
+
     await callback.message.edit_text(
         f"✅ **Запись создана!**\n\n"
         f"👤 {patient_name}\n"
         f"📅 {display_date} в {time_str}\n"
-        f"🏥 {service_text or 'Без услуги'}\n"
+        f"🏥 {service_name or 'Без услуги'}{price_str}\n"
         f"🆔 Запись #{appointment.id}"
     )
     await state.clear()
     await callback.answer("✅ Записано!")
 
 
-# ── 11. Редактирование из подтверждения ────────────────────────────────
+# ── 13. Редактирование из подтверждения ────────────────────────────────
 
 @router.callback_query(StateFilter(VoiceBookingStates.confirming), F.data == "vb_edit_date")
 async def cb_edit_date(callback: CallbackQuery, state: FSMContext):
@@ -625,9 +907,15 @@ async def cb_edit_time(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(StateFilter(VoiceBookingStates.confirming), F.data == "vb_edit_service")
-async def cb_edit_service(callback: CallbackQuery, state: FSMContext):
-    await callback.message.edit_text("🏥 Введите услугу (например: лечение кариеса, консультация):")
-    await state.set_state(VoiceBookingStates.choosing_service)
+async def cb_edit_service(
+    callback: CallbackQuery,
+    effective_doctor: User,
+    state: FSMContext,
+    db_session: AsyncSession,
+):
+    """Изменить услугу — сбрасываем и показываем категории."""
+    await state.update_data(vb_service_id=None, vb_service=None, vb_service_price=None)
+    await _show_service_picker(callback.message, effective_doctor, state, db_session)
     await callback.answer()
 
 
