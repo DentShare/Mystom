@@ -31,6 +31,7 @@ from app.utils.formatters import format_money, treatment_effective_price
 from app.states.patient import PatientStates
 from app.keyboards.main import get_cancel_keyboard, get_main_menu_keyboard
 from app.utils.permissions import can_access, FEATURE_CALENDAR
+from app.services.notification_service import notify_new_appointment
 from sqlalchemy import select, and_
 
 router = Router(name="calendar")
@@ -486,6 +487,8 @@ async def process_time_selection(
         db_session.add(treatment)
         await db_session.commit()
 
+        await notify_new_appointment(callback.bot, db_session, appointment, user.telegram_id)
+
         await callback.message.edit_text(
             f"✅ Запись создана!\n\n"
             f"📅 Дата: {appointment_datetime.strftime('%d.%m.%Y %H:%M')}\n"
@@ -594,6 +597,8 @@ async def process_appointment_discount(
     db_session.add(treatment)
     await db_session.commit()
 
+    await notify_new_appointment(message.bot, db_session, appointment, user.telegram_id)
+
     eff = treatment_effective_price(service_price, discount_percent, discount_amount)
     msg = (
         f"✅ Запись создана!\n\n"
@@ -631,7 +636,10 @@ async def process_patient_name_basic(
     )
     db_session.add(appointment)
     await db_session.commit()
-    
+    await db_session.refresh(appointment)
+
+    await notify_new_appointment(message.bot, db_session, appointment, user.telegram_id)
+
     await message.answer(
         f"✅ Запись создана!\n\n"
         f"📅 Дата: {appointment_datetime.strftime('%d.%m.%Y %H:%M')}\n"

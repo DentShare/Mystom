@@ -17,6 +17,7 @@ from app.config import Config
 from app.database.models import User, Patient, Appointment, Treatment
 from app.states.voice_booking import VoiceBookingStates
 from app.services.patient_service import search_patients
+from app.services.notification_service import notify_new_appointment
 from app.services.ai_service import (
     transcribe_voice,
     parse_image_for_booking,
@@ -589,6 +590,8 @@ async def cb_confirm_booking(
         )
         db_session.add(treatment)
         await db_session.commit()
+
+    await notify_new_appointment(callback.bot, db_session, appointment, callback.from_user.id)
 
     patient_name = data.get("vb_patient_full_name", "—")
     days_ru = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
