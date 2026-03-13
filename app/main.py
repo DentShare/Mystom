@@ -121,6 +121,9 @@ async def main():
 
     async def run_reminders():
         """Фоновая задача: проверка и отправка напоминаний каждые 60 сек"""
+        from sqlalchemy import select as sa_select
+        from app.database.models import DoctorAssistant, User as UserModel
+
         while True:
             try:
                 await asyncio.sleep(60)
@@ -129,13 +132,29 @@ async def main():
                     for apt, doctor, reminder_mins in due:
                         try:
                             text = format_reminder_message(apt, reminder_mins)
-                            await bot.send_message(doctor.telegram_id, text)
+
+                            # Собираем получателей: врач + ассистенты
+                            recipients = {doctor.telegram_id}
+                            assistants_stmt = (
+                                sa_select(UserModel.telegram_id)
+                                .join(DoctorAssistant, DoctorAssistant.assistant_id == UserModel.id)
+                                .where(DoctorAssistant.doctor_id == doctor.id)
+                            )
+                            result = await db_session.execute(assistants_stmt)
+                            for (tid,) in result.all():
+                                recipients.add(tid)
+
+                            for tid in recipients:
+                                try:
+                                    await bot.send_message(tid, text)
+                                except Exception as e:
+                                    logger.warning("Reminder send error to %s: %s", tid, e)
+                                await asyncio.sleep(0.05)
+
                             apt.reminder_sent_at = datetime.now()
-                            logger.info("Reminder sent for appointment %s to doctor %s", apt.id, doctor.id)
+                            logger.info("Reminder sent for appointment %s to %d recipients", apt.id, len(recipients))
                         except Exception as e:
                             logger.exception("Reminder send error: %s", e)
-                        # Telegram rate-limit: не более 30 msg/sec
-                        await asyncio.sleep(0.05)
                     # Один commit на всю пачку вместо коммита на каждое напоминание
                     await db_session.commit()
 
