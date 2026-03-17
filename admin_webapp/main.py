@@ -38,6 +38,16 @@ logger.propagate = False
 
 app = FastAPI(title="MiniStom Admin")
 
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
 # Лог конфигурации при старте (для отладки)
 def _mask_token(t: str) -> str:
     if not t or len(t) < 12:
@@ -281,7 +291,13 @@ async def api_update_user(
 # Health check для Railway (без авторизации)
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    try:
+        async with async_session_maker() as db:
+            await db.execute(select(func.count()).select_from(User))
+        return {"status": "ok", "db": "connected"}
+    except Exception as e:
+        logger.error("Health check DB error: %s", e)
+        return {"status": "degraded", "db": str(e)}
 
 
 
