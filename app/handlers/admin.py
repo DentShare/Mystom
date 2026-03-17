@@ -46,7 +46,8 @@ async def cmd_admin(message: Message):
         "• /admin_set_tier telegram_id 0|1|2 — уровень без срока\n"
         "• /admin_set_subscription telegram_id tier дни — уровень и срок\n"
         "• /admin_send telegram_id текст — личное сообщение пользователю\n"
-        "• /admin_broadcast текст — сообщение всем пользователям\n\n"
+        "• /admin_broadcast текст — сообщение всем пользователям\n"
+        "• /errors — статистика ошибок мониторинга\n\n"
         "Уровни: 0=Basic, 1=Standard, 2=Premium.\n"
         "Telegram ID смотрите в списке пользователей."
     ).format(message.from_user.id)
@@ -328,4 +329,14 @@ async def cmd_admin_broadcast(message: Message, db_session: AsyncSession):
         f"✅ Рассылка завершена.\nОтправлено: {sent}, не доставлено: {failed}{extra}.",
         parse_mode=None,
     )
+
+
+@router.message(Command("errors"))
+async def cmd_errors(message: Message):
+    """Статистика мониторинга ошибок (только для админов)."""
+    if not message.from_user or not _is_admin(message.from_user.id):
+        return
+    from app.services.error_monitor import error_monitor
+    stats = await error_monitor.get_stats()
+    await message.answer(stats, parse_mode="HTML")
 

@@ -41,7 +41,20 @@ app = FastAPI(title="MiniStom Admin")
 
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        # Отправляем ошибку в мониторинг (если бот запущен)
+        try:
+            from app.services.error_monitor import error_monitor
+            if error_monitor._bot:
+                import asyncio
+                asyncio.create_task(
+                    error_monitor.report(exc, context=f"admin_webapp: {request.method} {request.url.path}")
+                )
+        except Exception:
+            pass
+        raise
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "SAMEORIGIN"
     response.headers["X-XSS-Protection"] = "1; mode=block"

@@ -20,6 +20,7 @@ from app.services.reminder_service import (
     get_appointments_due_for_reminder,
     format_reminder_message,
 )
+from app.services.error_monitor import error_monitor
 
 # Настройка логирования
 logging.basicConfig(
@@ -96,8 +97,33 @@ async def main():
 
     @dp.error()
     async def global_error_handler(event: ErrorEvent):
-        """Глобальный обработчик ошибок: логирование и ответ пользователю."""
+        """Глобальный обработчик ошибок: логирование, ответ пользователю, отчёт админам."""
         logger.exception("Ошибка при обработке апдейта: %s", event.exception)
+
+        # Извлекаем контекст для отчёта
+        user_id = None
+        handler_name = ""
+        try:
+            update = event.update
+            if update.message and update.message.from_user:
+                user_id = update.message.from_user.id
+                handler_name = f"message: {(update.message.text or '')[:50]}"
+            elif update.callback_query and update.callback_query.from_user:
+                user_id = update.callback_query.from_user.id
+                handler_name = f"callback: {update.callback_query.data or ''}"
+        except Exception:
+            pass
+
+        # Отправляем отчёт админам (асинхронно, не блокируя ответ пользователю)
+        asyncio.create_task(
+            error_monitor.report(
+                event.exception,
+                handler=handler_name,
+                user_id=user_id,
+            )
+        )
+
+        # Ответ пользователю
         try:
             update = event.update
             if update.message:
@@ -118,6 +144,9 @@ async def main():
         return True
 
     logger.info("Бот запущен")
+
+    # Запуск мониторинга ошибок
+    await error_monitor.start(bot)
 
     async def run_reminders():
         """Фоновая задача: проверка и отправка напоминаний каждые 60 сек"""
@@ -155,6 +184,7 @@ async def main():
                             logger.info("Reminder sent for appointment %s to %d recipients", apt.id, len(recipients))
                         except Exception as e:
                             logger.exception("Reminder send error: %s", e)
+                            await error_monitor.report(e, context="reminder: отправка напоминания")
                     # Один commit на всю пачку вместо коммита на каждое напоминание
                     await db_session.commit()
 
@@ -162,6 +192,7 @@ async def main():
                 break
             except Exception as e:
                 logger.exception("Reminder scheduler error: %s", e)
+                await error_monitor.report(e, context="reminder: цикл планировщика")
 
     reminder_task = asyncio.create_task(run_reminders())
 
@@ -176,6 +207,7 @@ async def main():
             await reminder_task
         except asyncio.CancelledError:
             pass
+        await error_monitor.stop()
         await close_db()
         await bot.session.close()
 
