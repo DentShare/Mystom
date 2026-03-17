@@ -73,40 +73,56 @@ def get_schedule_dates_keyboard(
     year: int,
     month: int
 ) -> InlineKeyboardMarkup:
-    """Клавиатура с датами, в которых есть записи"""
-    builder = InlineKeyboardBuilder()
-    
-    month_names = [
-        "янв", "фев", "мар", "апр", "май", "июн",
-        "июл", "авг", "сен", "окт", "ноя", "дек"
+    """Календарь-сетка для расписания: дни с записями кликабельны и выделены"""
+    markup = []
+    apt_days = {d.day for d in dates_with_appointments}
+
+    # Навигация
+    prev_month = month - 1 if month > 1 else 12
+    prev_year = year if month > 1 else year - 1
+    next_month = month + 1 if month < 12 else 1
+    next_year = year if month < 12 else year + 1
+
+    row_header = [
+        InlineKeyboardButton(text="◀️", callback_data=f"sched_prev_{prev_year}_{prev_month}"),
+        InlineKeyboardButton(text=f"{RU_MONTHS[month]} {year}", callback_data="sched_none"),
+        InlineKeyboardButton(text="▶️", callback_data=f"sched_next_{next_year}_{next_month}"),
     ]
-    
-    for d in dates_with_appointments:
-        text = f"{d.day} {month_names[d.month - 1]}"
-        builder.button(
-            text=text,
-            callback_data=f"sched_date_{d.year}_{d.month}_{d.day}"
-        )
-    
-    # Навигация по месяцам
-    if month == 1:
-        prev_year, prev_month = year - 1, 12
-    else:
-        prev_year, prev_month = year, month - 1
-    
-    if month == 12:
-        next_year, next_month = year + 1, 1
-    else:
-        next_year, next_month = year, month + 1
-    
-    builder.button(text="◀️", callback_data=f"sched_prev_{prev_year}_{prev_month}")
-    builder.button(text=f"{month_names[month-1]} {year}", callback_data="sched_none")
-    builder.button(text="▶️", callback_data=f"sched_next_{next_year}_{next_month}")
-    builder.adjust(3)  # 3 кнопки в ряд для дат, навигация внизу
-    
-    builder.button(text="⬅️ Назад", callback_data="sched_back")
-    
-    return builder.as_markup()
+    markup.append(row_header)
+
+    # Дни недели
+    row_weekdays = [
+        InlineKeyboardButton(text=day, callback_data="sched_none")
+        for day in RU_WEEKDAYS
+    ]
+    markup.append(row_weekdays)
+
+    # Сетка дней
+    today = datetime.now().date()
+    month_cal = cal_stdlib.monthcalendar(year, month)
+
+    for week in month_cal:
+        row = []
+        for day in week:
+            if day == 0:
+                row.append(InlineKeyboardButton(text=" ", callback_data="sched_none"))
+            elif day in apt_days:
+                # День с записями — кликабельный, выделен
+                label = f"•{day}•" if date(year, month, day) == today else f"[{day}]"
+                row.append(InlineKeyboardButton(
+                    text=label,
+                    callback_data=f"sched_date_{year}_{month}_{day}"
+                ))
+            else:
+                # Обычный день без записей — не кликабельный
+                label = f"·{day}·" if date(year, month, day) == today else str(day)
+                row.append(InlineKeyboardButton(text=label, callback_data="sched_none"))
+        markup.append(row)
+
+    # Кнопка назад
+    markup.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="sched_back")])
+
+    return InlineKeyboardMarkup(inline_keyboard=markup)
 
 
 def get_time_slots_keyboard(
