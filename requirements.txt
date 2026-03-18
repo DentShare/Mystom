@@ -15,6 +15,8 @@ openai==1.82.0
 # для веб-админки (admin_webapp) при деплое из одного образа
 fastapi==0.115.12
 uvicorn[standard]==0.34.2
+# Redis (опционально, для rate limiting при масштабировании)
+redis==5.2.1
 # тестирование
 pytest==8.3.5
 pytest-asyncio==0.24.0

@@ -29,6 +29,9 @@ class Config:
     # OpenAI (для распознавания голоса и скриншотов)
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "").strip()
 
+    # Redis (опционально, для rate limiting; без него — in-memory)
+    REDIS_URL: str = os.getenv("REDIS_URL", "").strip()
+
     # Timezone (опционально)
     TIMEZONE_API_KEY: str = os.getenv("TIMEZONE_API_KEY", "")
 

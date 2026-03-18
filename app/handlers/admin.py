@@ -47,7 +47,8 @@ async def cmd_admin(message: Message):
         "• /admin_set_subscription telegram_id tier дни — уровень и срок\n"
         "• /admin_send telegram_id текст — личное сообщение пользователю\n"
         "• /admin_broadcast текст — сообщение всем пользователям\n"
-        "• /errors — статистика ошибок мониторинга\n\n"
+        "• /errors — статистика ошибок мониторинга\n"
+        "• /backup — ручной бэкап БД (отправляет файл)\n\n"
         "Уровни: 0=Basic, 1=Standard, 2=Premium.\n"
         "Telegram ID смотрите в списке пользователей."
     ).format(message.from_user.id)
@@ -339,4 +340,15 @@ async def cmd_errors(message: Message):
     from app.services.error_monitor import error_monitor
     stats = await error_monitor.get_stats()
     await message.answer(stats, parse_mode="HTML")
+
+
+@router.message(Command("backup"))
+async def cmd_backup(message: Message):
+    """Ручной бэкап БД (только для админов)."""
+    if not message.from_user or not _is_admin(message.from_user.id):
+        return
+    await message.answer("💾 Создаю бэкап БД...")
+    from app.services.backup_service import run_backup_and_send
+    status = await run_backup_and_send(message.bot)
+    await message.answer(status)
 

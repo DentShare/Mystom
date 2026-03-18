@@ -62,13 +62,18 @@ async def main():
         logger.error(f"Ошибка инициализации БД: {e}")
         return
     
+    # Redis для rate limiting (опционально)
+    if Config.REDIS_URL:
+        from app.middleware.throttle import init_redis
+        await init_redis(Config.REDIS_URL)
+
     # Создание бота и диспетчера
     bot = Bot(
         token=Config.BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN)
     )
     dp = Dispatcher(storage=MemoryStorage())
-    
+
     # Регистрация middleware
     dp.message.middleware(ThrottleMiddleware(rate=5, period=10))
     dp.callback_query.middleware(ThrottleMiddleware(rate=10, period=10))
@@ -196,6 +201,10 @@ async def main():
 
     reminder_task = asyncio.create_task(run_reminders())
 
+    # Фоновый бэкап БД
+    from app.services.backup_service import backup_scheduler
+    backup_task = asyncio.create_task(backup_scheduler(bot))
+
     # Запуск polling
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
@@ -203,11 +212,18 @@ async def main():
         logger.error(f"Ошибка при работе бота: {e}")
     finally:
         reminder_task.cancel()
+        backup_task.cancel()
         try:
             await reminder_task
         except asyncio.CancelledError:
             pass
+        try:
+            await backup_task
+        except asyncio.CancelledError:
+            pass
         await error_monitor.stop()
+        from app.middleware.throttle import close_redis
+        await close_redis()
         await close_db()
         await bot.session.close()
 
