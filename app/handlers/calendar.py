@@ -31,7 +31,11 @@ from app.utils.formatters import format_money, treatment_effective_price
 from app.states.patient import PatientStates
 from app.keyboards.main import get_cancel_keyboard, get_main_menu_keyboard
 from app.utils.permissions import can_access, FEATURE_CALENDAR
-from app.services.notification_service import notify_new_appointment
+from app.services.notification_service import (
+    notify_new_appointment,
+    notify_appointment_cancelled,
+    notify_appointment_rescheduled,
+)
 from sqlalchemy import select, and_
 
 router = Router(name="calendar")
@@ -434,8 +438,12 @@ async def process_time_selection(
         result = await db_session.execute(stmt)
         appointment = result.scalar_one_or_none()
         if appointment:
+            old_dt_str = appointment.date_time.strftime("%d.%m.%Y %H:%M")
             appointment.date_time = appointment_datetime
             await db_session.commit()
+            await notify_appointment_rescheduled(
+                callback.bot, db_session, appointment, old_dt_str, user.telegram_id
+            )
             await callback.message.edit_text(
                 f"✅ Запись перенесена!\n\n"
                 f"📅 Новая дата и время: {appointment_datetime.strftime('%d.%m.%Y %H:%M')}"
@@ -953,7 +961,9 @@ async def cancel_existing_appointment(
     target_date = appointment.date_time.date()
     appointment.status = "cancelled"
     await db_session.commit()
-    
+
+    await notify_appointment_cancelled(callback.bot, db_session, appointment, user.telegram_id)
+
     appointments = await get_appointments_by_date(db_session, effective_doctor.id, target_date)
     show_price = effective_doctor.subscription_tier >= 1
     text = await format_schedule_with_contacts(appointments, show_price=show_price)

@@ -12,6 +12,7 @@ from app.services.patient_service import search_patients, get_patient_by_id, get
 from app.keyboards.main import get_cancel_keyboard
 from app.states.appointment import AppointmentStates
 from app.utils.permissions import can_access, FEATURE_PATIENTS
+from app.services.notification_service import notify_patient_changed, notify_patient_created
 
 router = Router(name="patients")
 
@@ -107,7 +108,9 @@ async def process_patient_phone(
     db_session.add(patient)
     await db_session.commit()
     await db_session.refresh(patient)
-    
+
+    await notify_patient_created(message.bot, db_session, effective_doctor.id, patient, message.from_user.id)
+
     if data.get("creating_for_appointment"):
         from app.handlers.calendar import _continue_appointment_creation
         await state.update_data(patient_id=patient.id, creating_for_appointment=False)
@@ -374,9 +377,14 @@ async def process_edit_name(
         await state.clear()
         return
 
+    old_name = patient.full_name
     patient.full_name = name
     await db_session.commit()
     await state.clear()
+    await notify_patient_changed(
+        message.bot, db_session, effective_doctor.id,
+        name, "ФИО", old_name, name, message.from_user.id,
+    )
     await message.answer(f"✅ ФИО изменено на **{name}**.")
     await _show_patient_info(message, patient)
 
@@ -427,10 +435,16 @@ async def process_edit_phone(
         await state.clear()
         return
 
+    old_phone = patient.phone or "не указан"
+
     if text.lower() == "/clear":
         patient.phone = None
         await db_session.commit()
         await state.clear()
+        await notify_patient_changed(
+            message.bot, db_session, effective_doctor.id,
+            patient.full_name, "Телефон", old_phone, "удалён", message.from_user.id,
+        )
         await message.answer("✅ Телефон удалён.")
         await _show_patient_info(message, patient)
         return
@@ -443,6 +457,10 @@ async def process_edit_phone(
     patient.phone = text
     await db_session.commit()
     await state.clear()
+    await notify_patient_changed(
+        message.bot, db_session, effective_doctor.id,
+        patient.full_name, "Телефон", old_phone, text, message.from_user.id,
+    )
     await message.answer(f"✅ Телефон изменён на **{text}**.")
     await _show_patient_info(message, patient)
 
@@ -493,10 +511,16 @@ async def process_edit_bdate(
         await state.clear()
         return
 
+    old_bdate = patient.birth_date.strftime('%d.%m.%Y') if patient.birth_date else "не указана"
+
     if text.lower() == "/clear":
         patient.birth_date = None
         await db_session.commit()
         await state.clear()
+        await notify_patient_changed(
+            message.bot, db_session, effective_doctor.id,
+            patient.full_name, "Дата рождения", old_bdate, "удалена", message.from_user.id,
+        )
         await message.answer("✅ Дата рождения удалена.")
         await _show_patient_info(message, patient)
         return
@@ -520,6 +544,10 @@ async def process_edit_bdate(
     patient.birth_date = parsed_date
     await db_session.commit()
     await state.clear()
+    await notify_patient_changed(
+        message.bot, db_session, effective_doctor.id,
+        patient.full_name, "Дата рождения", old_bdate, parsed_date.strftime('%d.%m.%Y'), message.from_user.id,
+    )
     await message.answer(f"✅ Дата рождения изменена на **{parsed_date.strftime('%d.%m.%Y')}**.")
     await _show_patient_info(message, patient)
 
@@ -575,6 +603,10 @@ async def process_edit_notes(
         patient.notes = None
         await db_session.commit()
         await state.clear()
+        await notify_patient_changed(
+            message.bot, db_session, effective_doctor.id,
+            patient.full_name, "Заметки", "были", "удалены", message.from_user.id,
+        )
         await message.answer("✅ Заметки удалены.")
         await _show_patient_info(message, patient)
         return
@@ -586,6 +618,10 @@ async def process_edit_notes(
     patient.notes = text
     await db_session.commit()
     await state.clear()
+    await notify_patient_changed(
+        message.bot, db_session, effective_doctor.id,
+        patient.full_name, "Заметки", "обновлены", text[:50], message.from_user.id,
+    )
     await message.answer("✅ Заметки обновлены.")
     await _show_patient_info(message, patient)
 
